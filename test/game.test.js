@@ -2,69 +2,47 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { action, newGame, view } from '../src/game.js';
 
-function setup(victory = 'elimination') {
-  const game = newGame('La prueba', victory);
-  for (const name of ['Lobo', 'Vidente', 'Ana', 'Max']) action(game, { action: 'add', name });
-  action(game, { action: 'role', playerId: game.players[0].id, role: 'wolf' });
-  action(game, { action: 'role', playerId: game.players[1].id, role: 'seer' });
+function lobby(n = 6) {
+  const game = newGame('La prueba');
+  for (let i = 0; i < n; i++) action(game, { action: 'add', name: `P${i}` });
   return game;
 }
-test('lobby and player views never reveal other living roles or tokens', () => {
-  const game = setup(); const [wolf, seer, ana] = game.players;
-  assert.ok(view(game, false, wolf).players.every(p => !p.role && !p.token));
-  action(game, { action: 'start' });
-  const player = view(game, false, seer);
-  assert.equal(player.players.find(p => p.id === seer.id).role, 'seer');
-  assert.equal(player.players.find(p => p.id === wolf.id).role, undefined);
-  assert.equal(player.inspections, undefined);
-  action(game, { action: 'inspect', playerId: wolf.id });
-  action(game, { action: 'hunt', playerId: ana.id });
-  assert.equal(view(game, false, seer).pendingVictim, undefined);
-  assert.equal(view(game, false, seer).players.find(p => p.id === ana.id).alive, true);
-  action(game, { action: 'dawn' });
-  assert.equal(view(game, false, seer).players.find(p => p.id === ana.id).role, 'villager');
-});
-test('complete village victory follows seer, wolves, dawn, voting', () => {
-  const game = setup(); const [wolf, , ana] = game.players;
-  action(game, { action: 'start' }); assert.equal(game.phase, 'seer');
-  action(game, { action: 'inspect', playerId: wolf.id }); assert.equal(game.phase, 'wolves');
-  assert.equal(game.inspections[0].role, 'wolf');
-  action(game, { action: 'hunt', playerId: ana.id }); assert.equal(game.phase, 'dawn');
-  action(game, { action: 'dawn' }); assert.equal(game.phase, 'day');
-  action(game, { action: 'vote', playerId: wolf.id });
-  assert.equal(game.winner, 'village'); assert.equal(game.phase, 'finished');
-});
-test('seer death skips future consultations and elimination differs from parity', () => {
-  for (const rule of ['elimination', 'parity']) {
-    const game = setup(rule); const [wolf, seer, ana, max] = game.players;
-    action(game, { action: 'start' });
-    action(game, { action: 'inspect', playerId: wolf.id });
-    action(game, { action: 'hunt', playerId: seer.id });
-    action(game, { action: 'dawn' });
-    action(game, { action: 'vote', playerId: ana.id });
-    if (rule === 'parity') { assert.equal(game.winner, 'wolves'); continue; }
-    assert.equal(game.winner, null); assert.equal(game.phase, 'wolves'); assert.equal(game.round, 2);
-    action(game, { action: 'hunt', playerId: max.id }); action(game, { action: 'dawn' });
-    assert.equal(game.winner, 'wolves');
-  }
-});
-test('invalid phase, self consultation, wolf attack and invalid rosters are rejected', () => {
-  const game = setup(); const [wolf, seer] = game.players;
-  assert.throws(() => action(game, { action: 'dawn' }));
-  action(game, { action: 'start' });
+const count = (game, role) => game.players.filter(p => p.role === role).length;
+
+test('start deals the exact deck, fills villagers and validates it', () => {
+  const game = lobby();
+  assert.throws(() => action(game, { action: 'start', roles: {} }), /al menos un hombre lobo/);
+  assert.throws(() => action(game, { action: 'start', roles: { wolf: 1, seer: 2 } }), /inválida/);
+  assert.throws(() => action(game, { action: 'start', roles: { wolf: 7 } }), /más cartas/);
+  action(game, { action: 'start', roles: { wolf: 2, seer: 1, witch: 1, girl: 1 } });
+  assert.deepEqual([count(game, 'wolf'), count(game, 'seer'), count(game, 'witch'), count(game, 'girl'), count(game, 'villager')], [2, 1, 1, 1, 1]);
+  assert.equal(game.phase, 'dealt'); assert.equal(game.joinOpen, false);
   assert.throws(() => action(game, { action: 'add', name: 'Late' }));
-  assert.throws(() => action(game, { action: 'inspect', playerId: seer.id }));
-  action(game, { action: 'inspect', playerId: wolf.id });
-  assert.throws(() => action(game, { action: 'hunt', playerId: wolf.id }));
-  assert.throws(() => action(game, { action: 'inspect', playerId: wolf.id }));
-  const invalid = setup(); action(invalid, { action: 'role', playerId: invalid.players[1].id, role: 'villager' });
-  assert.throws(() => action(invalid, { action: 'start' }));
 });
-test('shuffle preserves players and private links and gives correct role counts', () => {
-  const game = setup(); const tokens = game.players.map(p => p.token);
-  action(game, { action: 'shuffle', wolves: 1 });
-  assert.deepEqual(game.players.map(p => p.token), tokens);
-  assert.equal(game.players.filter(p => p.role === 'wolf').length, 1);
-  assert.equal(game.players.filter(p => p.role === 'seer').length, 1);
-  assert.equal(game.players.filter(p => p.role === 'villager').length, 2);
+test('pending players block the deal until approved', () => {
+  const game = lobby(3);
+  action(game, { action: 'join', name: 'Guest', token: 'a'.repeat(43) });
+  assert.throws(() => action(game, { action: 'start', roles: { wolf: 1 } }), /pendientes/);
+  action(game, { action: 'approve', playerId: game.players.at(-1).id });
+  action(game, { action: 'start', roles: { wolf: 1 } });
+});
+test('players only see their own card; eliminated cards become public; tokens stay private', () => {
+  const game = lobby(); action(game, { action: 'start', roles: { wolf: 1, seer: 1 } });
+  const [a, b] = game.players;
+  const mine = view(game, false, a);
+  assert.ok(mine.players.find(p => p.id === a.id).role);
+  assert.ok(mine.players.filter(p => p.id !== a.id).every(p => !p.role && !p.token));
+  action(game, { action: 'eliminate', playerId: b.id, alive: false });
+  assert.equal(view(game, false, a).players.find(p => p.id === b.id).role, b.role);
+  assert.ok(view(game, true).players.every(p => p.role && p.token));
+});
+test('redeal reshuffles the same deck and revives everyone; reset returns to the lobby', () => {
+  const game = lobby(); action(game, { action: 'start', roles: { wolf: 2, hunter: 1 } });
+  action(game, { action: 'eliminate', playerId: game.players[0].id, alive: false });
+  action(game, { action: 'redeal' });
+  assert.ok(game.players.every(p => p.alive)); assert.equal(count(game, 'wolf'), 2); assert.equal(count(game, 'hunter'), 1);
+  const tokens = game.players.map(p => p.token);
+  action(game, { action: 'reset' });
+  assert.equal(game.phase, 'lobby'); assert.deepEqual(game.players.map(p => p.token), tokens); assert.equal(game.joinOpen, true);
+  assert.throws(() => action(game, { action: 'redeal' }));
 });

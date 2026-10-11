@@ -5,81 +5,76 @@ import { JSDOM } from 'jsdom';
 import { sqliteStore } from '../src/sqlite.js';
 import { apiHandler } from '../src/http.js';
 
-const html = readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
-const js = readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
-async function until(condition) { for(let i=0;i<100;i++) { if(condition()) return; await new Promise(r=>setTimeout(r,5)); } assert.fail('UI did not reach the expected state'); }
-function browser(t, handle, fragment = '') {
-  const dom = new JSDOM(html,{url:`https://game.example/${fragment}`,runScripts:'outside-only',pretendToBeVisual:true}); const w=dom.window;
-  t.after(()=>w.close()); w.AbortSignal=AbortSignal;
-  w.fetch=(path,options={})=>handle(new Request(`https://game.example${path}`,options),'dom-ip');
-  w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
-  w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};
-  w.confirm=()=>true; w.eval(js); return w;
+const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const js = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+const wait = ms => new Promise(r => setTimeout(r, ms));
+async function until(condition) { for (let i = 0; i < 200; i++) { if (condition()) return; await wait(5); } assert.fail('UI did not reach the expected state'); }
+function browser(t, handle, path = '/') {
+  const dom = new JSDOM(html, { url: `https://game.example${path}`, runScripts: 'outside-only', pretendToBeVisual: true });
+  const w = dom.window; t.after(() => w.close());
+  w.AbortSignal = AbortSignal; w.scrollTo = () => {};
+  w.fetch = (url, options = {}) => handle(new Request(`https://game.example${url}`, options), 'dom-ip');
+  w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
+  w.confirm = () => true; w.eval(js); return w;
 }
-async function create(handle) { return (await handle(new Request('https://game.example/api/games',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'DOM test'})}),'seed-ip')).json(); }
-test('narrator can add a player, generate a QR and approve a room-code guest',async t=>{
-  const store=sqliteStore(':memory:');t.after(()=>store.close());const handle=apiHandler(store);const room=await create(handle);
-  const w=browser(t,handle,`#${room.code}/${room.token}`);
-  await until(()=>w.document.querySelector('#add-player'));
-  const form=w.document.querySelector('#add-player');form.elements.namedItem('name').value='Max';form.dispatchEvent(new w.Event('submit',{cancelable:true}));
-  await until(()=>w.document.querySelector('.player-name')?.textContent.includes('Max'));
-  w.document.querySelector('#room-qr').click();await until(()=>w.document.querySelector('.qr-dialog img'));
-  assert.ok(w.document.querySelector('.qr-dialog img').src.startsWith('data:image/png;base64,'));
-  w.document.querySelector('.qr-dialog').close();
-  const joined=await handle(new Request(`https://game.example/api/games/${room.code}/join`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Isa'})}),'guest-ip');assert.equal(joined.status,201);
-  // Reloading is equivalent to the next polling update, without waiting five seconds in a unit test.
+const post = (handle, path, data, token) => handle(new Request(`https://game.example${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(data) }), 'seed-ip').then(r => r.json());
+const click = (w, selector) => w.document.querySelector(selector).dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+const submit = (w, form) => form.dispatchEvent(new w.Event('submit', { cancelable: true, bubbles: true }));
+function setup(t) { const store = sqliteStore(':memory:'); t.after(() => store.close()); return apiHandler(store); }
+
+test('home offers create, join and practice; rules list every role', async t => {
+  const w = browser(t, setup(t));
+  assert.ok(w.document.querySelector('[data-act=createForm]'));
+  assert.ok(w.document.querySelector('[data-act=joinForm]'));
+  assert.equal(w.document.querySelectorAll('#rules-roles li').length, 7);
+});
+test('host adds a player, shows the QR and approves a guest who joined by code', async t => {
+  const handle = setup(t); const room = await post(handle, '/api/games', { title: 'DOM test' });
+  const w = browser(t, handle, `/#${room.code}/${room.token}`);
+  await until(() => w.document.querySelector('#add'));
+  const form = w.document.querySelector('#add'); form.elements.namedItem('name').value = 'Max'; submit(w, form);
+  await until(() => w.document.querySelector('.player-row strong')?.textContent === 'Max');
+  await until(() => w.document.querySelector('#qr-box img')?.src.startsWith('data:image/png;base64,'));
+  assert.equal(w.document.querySelector('.code').textContent, room.code);
+  const joined = await post(handle, `/api/games/${room.code}/join`, { name: 'Isa' });
+  assert.ok(joined.token);
   w.dispatchEvent(new w.HashChangeEvent('hashchange'));
-  await until(()=>w.document.querySelector('.pending'));
-  w.document.querySelector('.pending .primary').click();await until(()=>!w.document.querySelector('.pending'));
-  assert.equal(w.document.querySelectorAll('.player-row').length,2);
+  await until(() => w.document.querySelector('[data-act=approve]'));
+  click(w, '[data-act=approve]');
+  await until(() => !w.document.querySelector('[data-act=approve]'));
+  assert.equal(w.document.querySelectorAll('.player-row').length, 2);
+  assert.ok(w.document.querySelector('[data-act=start]').disabled, 'cannot deal with 2 players');
 });
-test('QR invitation renders the join form and lands in the approval waiting screen',async t=>{
-  const store=sqliteStore(':memory:');t.after(()=>store.close());const handle=apiHandler(store);const room=await create(handle);
-  const w=browser(t,handle,`#join/${room.code}`); const form=w.document.querySelector('#join');
-  assert.equal(form.elements.namedItem('code').value,room.code);
-  form.elements.namedItem('playerName').value='Guest';form.dispatchEvent(new w.Event('submit',{cancelable:true}));
-  await until(()=>w.document.querySelector('.player-view'));
-  assert.match(w.document.querySelector('.pill').textContent,/Esperando aprobación/);
-  assert.equal(w.document.querySelector('#card').disabled,true);
-  assert.ok(!w.document.querySelector('#card').textContent.includes('Hombre lobo'));
+test('QR invitation lands in the waiting-for-approval screen', async t => {
+  const handle = setup(t); const room = await post(handle, '/api/games', { title: 'QR' });
+  const w = browser(t, handle, `/#join/${room.code}`);
+  const form = w.document.querySelector('#join');
+  assert.equal(form.elements.namedItem('code').value, room.code);
+  form.elements.namedItem('playerName').value = 'Guest'; submit(w, form);
+  await until(() => w.document.querySelector('.status h2'));
+  assert.match(w.document.querySelector('#app').textContent, /Esperando al narrador/);
+  assert.ok(!w.document.querySelector('#card'));
 });
-test('demo uses real phases and private perspectives, with reveal and Escape hide',async t=>{
-  const store=sqliteStore(':memory:');t.after(()=>store.close());const handle=apiHandler(store);
-  const w=browser(t,handle,'demo');
-  await until(()=>w.document.querySelector('#demo-next'));
-  assert.equal(w.document.querySelectorAll('.player-row').length,8);
-  w.document.querySelector('#demo-next').click();
-  await until(()=>w.document.querySelector('#app').dataset.phase==='seer');
-  const select=w.document.querySelector('#demo-perspective');select.value=select.options[1].value;select.dispatchEvent(new w.Event('change'));
-  await until(()=>w.document.querySelector('#role-toggle'));
-  assert.equal(w.document.querySelector('#card').getAttribute('aria-pressed'),'false');
-  w.document.querySelector('#role-toggle').click();
-  assert.match(w.document.querySelector('#card').textContent,/Hombre lobo/);
-  assert.equal(w.document.querySelector('#card').getAttribute('aria-pressed'),'true');
-  w.document.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape'}));
-  assert.equal(w.document.querySelector('#card').getAttribute('aria-pressed'),'false');
-  assert.ok(w.document.querySelector('#demo-next'));
-  assert.equal(w.localStorage.getItem('werewolves.session'),null);
-  for (const phase of ['wolves','dawn','day','seer','wolves','dawn','day','finished']) {
-    w.document.querySelector('#demo-next').click();
-    await until(()=>w.document.querySelector('#app').dataset.phase===phase);
-  }
-  assert.match(w.document.querySelector('.player-view').textContent,/Ganó la aldea/);
-  assert.equal(w.document.querySelector('#demo-next').disabled,true);
-});
-for (const scenario of ['wolves','seer','tie']) test(`demo scenario: ${scenario}`,async t=>{
-  const store=sqliteStore(':memory:');t.after(()=>store.close());const handle=apiHandler(store);const w=browser(t,handle,'demo');
-  await until(()=>w.document.querySelector('#demo-next'));
-  const select=w.document.querySelector('#demo-scenario');select.value=scenario;select.dispatchEvent(new w.Event('change'));
-  async function next() { const before=w.document.querySelector('#demo-next');before.click();await until(()=>w.document.querySelector('#demo-next')!==before); }
-  await next();await next();await next();await next();
-  assert.equal(w.document.querySelector('#app').dataset.phase,'day');
-  if (scenario==='tie') {
-    await next();assert.equal(w.document.querySelectorAll('.player-row.dead').length,1);assert.match(w.document.querySelector('.timeline').textContent,/no eliminó a nadie/);
-  } else if (scenario==='seer') {
-    await next();assert.equal(w.document.querySelector('#app').dataset.phase,'wolves');
-  } else {
-    for(let i=0;i<20 && w.document.querySelector('#app').dataset.phase!=='finished';i++) await next();
-    assert.equal(w.document.querySelector('#app').dataset.phase,'finished');assert.match(w.document.querySelector('.columns').textContent,/La manada venció/);
-  }
+test('practice room: deal, private card flip, eliminate, redeal and back to the lobby', async t => {
+  const handle = setup(t);
+  const w = browser(t, handle, '/demo');
+  await until(() => w.document.querySelector('[data-act=start]'));
+  assert.equal(w.document.querySelectorAll('.player-row').length, 8);
+  click(w, '[data-act=start]');
+  await until(() => w.document.querySelector('[data-act=redeal]'));
+  const { code, token } = JSON.parse(w.localStorage.getItem('werewolves.session'));
+  const players = (await (await handle(new Request(`https://game.example/api/games/${code}`, { headers: { Authorization: `Bearer ${token}` } }), 'x')).json()).players;
+  const phone = browser(t, handle, `/#${code}/${players[0].token}`);
+  await until(() => phone.document.querySelector('#card'));
+  assert.equal(phone.document.querySelector('#card').getAttribute('aria-pressed'), 'false');
+  click(phone, '#card'); assert.equal(phone.document.querySelector('#card').getAttribute('aria-pressed'), 'true');
+  phone.document.dispatchEvent(new phone.KeyboardEvent('keydown', { key: 'Escape' }));
+  assert.equal(phone.document.querySelector('#card').getAttribute('aria-pressed'), 'false');
+  click(w, '[data-act=toggleDead]');
+  await until(() => w.document.querySelector('.player-row.dead'));
+  click(w, '[data-act=redeal]');
+  await until(() => !w.document.querySelector('.player-row.dead'));
+  click(w, '[data-act=reset]');
+  await until(() => w.document.querySelector('[data-act=start]'));
 });

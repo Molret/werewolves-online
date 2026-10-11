@@ -1,6 +1,18 @@
 import { randomBytes, randomInt } from 'node:crypto';
 
-export const roles = ['villager', 'wolf', 'seer'];
+// Role ids. `max` is how many copies the deck allows (villagers fill whatever is left).
+export const ROLES = {
+  villager: { max: 18 },
+  wolf: { max: 17 },
+  seer: { max: 1 },
+  witch: { max: 1 },
+  hunter: { max: 1 },
+  cupid: { max: 1 },
+  girl: { max: 1 }
+};
+export const roles = Object.keys(ROLES);
+const MAX_PLAYERS = 18;
+
 export const token = () => randomBytes(32).toString('base64url');
 export class GameError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -12,105 +24,83 @@ export function name(value) {
   requireThat(typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 40, 'Usa un nombre de 1 a 40 caracteres.');
   return value.trim();
 }
-export function newGame(title, victory = 'elimination') {
-  requireThat(['elimination', 'parity'].includes(victory), 'Regla de victoria inválida.');
-  return { title: name(title), victory, phase: 'lobby', joinOpen: true, round: 0, revision: 0, players: [], events: [], inspections: [], winner: null };
+export function newGame(title) {
+  return { title: name(title), phase: 'lobby', joinOpen: true, revision: 0, players: [], deck: null };
 }
-function alive(game, id) {
-  const player = game.players.find(p => p.id === id && p.alive);
-  requireThat(player, 'Selecciona un jugador vivo.');
-  return player;
+
+const find = (game, id) => game.players.find(p => p.id === id);
+function lobby(game) { requireThat(game.phase === 'lobby', 'Las cartas ya están repartidas.', 409); }
+
+function validDeck(game, want) {
+  const n = game.players.length;
+  requireThat(n >= 3, 'Se necesitan al menos 3 jugadores.');
+  requireThat(game.players.every(p => p.approved !== false), 'Aprueba o quita a los jugadores pendientes.');
+  const deck = {};
+  for (const [role, { max }] of Object.entries(ROLES)) {
+    if (role === 'villager') continue;
+    const count = want?.[role] ?? 0;
+    requireThat(Number.isInteger(count) && count >= 0 && count <= max, 'Cantidad de cartas inválida.');
+    if (count) deck[role] = count;
+  }
+  const special = Object.values(deck).reduce((a, b) => a + b, 0);
+  requireThat(deck.wolf >= 1, 'Debe haber al menos un hombre lobo.');
+  requireThat(special <= n, 'Hay más cartas especiales que jugadores.');
+  return deck;
 }
-function event(game, text) { game.events.push({ round: game.round, text }); }
-function checkWinner(game) {
-  const wolves = game.players.filter(p => p.alive && p.role === 'wolf').length;
-  const village = game.players.filter(p => p.alive && p.role !== 'wolf').length;
-  if (!wolves) game.winner = 'village';
-  else if (!village || (game.victory === 'parity' && wolves >= village)) game.winner = 'wolves';
-  if (game.winner) { game.phase = 'finished'; event(game, game.winner === 'village' ? 'La aldea gana la partida.' : 'Los hombres lobo ganan la partida.'); }
+function deal(game, deck) {
+  const cards = Object.entries(deck).flatMap(([role, count]) => Array(count).fill(role));
+  cards.push(...Array(game.players.length - cards.length).fill('villager'));
+  for (let i = cards.length - 1; i > 0; i--) { const j = randomInt(i + 1); [cards[i], cards[j]] = [cards[j], cards[i]]; }
+  game.players.forEach((p, i) => { p.role = cards[i]; p.alive = true; });
+  game.deck = deck; game.joinOpen = false; game.phase = 'dealt';
 }
-function nextNight(game) {
-  game.round++;
-  game.phase = game.players.some(p => p.alive && p.role === 'seer') ? 'seer' : 'wolves';
-}
+
 export function action(game, body) {
   requireThat(body && typeof body === 'object', 'Acción inválida.');
-  const lobby = () => requireThat(game.phase === 'lobby', 'La partida ya comenzó.', 409);
   switch (body.action) {
     case 'add': {
-      lobby(); requireThat(game.players.length < 18, 'La sala admite hasta 18 jugadores.');
+      lobby(game); requireThat(game.players.length < MAX_PLAYERS, `La sala admite hasta ${MAX_PLAYERS} jugadores.`);
       const displayName = name(body.name);
       requireThat(!game.players.some(p => p.name.toLocaleLowerCase() === displayName.toLocaleLowerCase()), 'Ese nombre ya está en la sala.');
       game.players.push({ id: randomBytes(8).toString('hex'), token: token(), name: displayName, role: 'villager', alive: true, approved: true });
       break;
     }
     case 'join': {
-      lobby(); requireThat(game.joinOpen !== false, 'El narrador cerró el ingreso a la sala.', 409);
+      lobby(game); requireThat(game.joinOpen !== false, 'El narrador cerró el ingreso a la sala.', 409);
       requireThat(typeof body.token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(body.token), 'Credencial de ingreso inválida.');
       if (game.players.some(p => p.token === body.token)) return game;
       action(game, { action: 'add', name: body.name });
       const p = game.players.at(-1); p.token = body.token; p.approved = false;
       return game;
     }
-    case 'approve': lobby(); alive(game, body.playerId).approved = true; break;
-    case 'lock': lobby(); requireThat(typeof body.open === 'boolean', 'Estado inválido.'); game.joinOpen = body.open; break;
-    case 'remove': lobby(); requireThat(game.players.some(p => p.id === body.playerId), 'Jugador inexistente.'); game.players = game.players.filter(p => p.id !== body.playerId); break;
-    case 'role': lobby(); requireThat(roles.includes(body.role), 'Rol inválido.'); alive(game, body.playerId).role = body.role; break;
-    case 'shuffle': {
-      lobby(); const n = game.players.length;
-      requireThat(n >= 4, 'Agrega al menos 4 jugadores.');
-      requireThat(Number.isInteger(body.wolves) && body.wolves >= 1 && body.wolves < n / 2, 'Elige una cantidad de lobos menor a la mitad del grupo.');
-      const deck = [...Array(body.wolves).fill('wolf'), 'seer', ...Array(n - body.wolves - 1).fill('villager')];
-      for (let i = deck.length - 1; i > 0; i--) { const j = randomInt(i + 1); [deck[i], deck[j]] = [deck[j], deck[i]]; }
-      game.players.forEach((p, i) => { p.role = deck[i]; });
-      break;
-    }
-    case 'start': {
-      lobby(); requireThat(game.players.length >= 4, 'Se necesitan al menos 4 jugadores; el manual recomienda 8 a 18.');
-      requireThat(game.players.every(p => p.approved !== false), 'Aprueba o quita a los jugadores pendientes.');
-      const wolves = game.players.filter(p => p.role === 'wolf').length;
-      requireThat(wolves >= 1 && wolves < game.players.length / 2, 'Debe haber al menos un lobo y menos lobos que aldeanos.');
-      requireThat(game.players.filter(p => p.role === 'seer').length === 1, 'Asigna exactamente una vidente.');
-      game.joinOpen = false; event(game, 'La aldea se duerme. Comienza la partida.'); nextNight(game); break;
-    }
-    case 'inspect': {
-      requireThat(game.phase === 'seer', 'No es el turno de la vidente.', 409);
-      const p = alive(game, body.playerId);
-      requireThat(p.role !== 'seer', 'La vidente debe consultar a otra persona.');
-      game.inspections.push({ round: game.round, playerId: p.id, name: p.name, role: p.role });
-      game.phase = 'wolves'; break;
-    }
-    case 'hunt': {
-      requireThat(game.phase === 'wolves', 'No es el turno de los lobos.', 409);
-      const p = alive(game, body.playerId);
-      requireThat(p.role !== 'wolf', 'Los lobos no pueden atacar a otro lobo.');
-      game.pendingVictim = p.id; game.phase = 'dawn'; break;
-    }
-    case 'dawn': {
-      requireThat(game.phase === 'dawn', 'Todavía no es el amanecer.', 409);
-      const p = alive(game, game.pendingVictim); p.alive = false;
-      delete game.pendingVictim; event(game, `${p.name} murió durante la noche.`);
-      game.phase = 'day'; checkWinner(game); break;
-    }
-    case 'vote': {
-      requireThat(game.phase === 'day', 'La votación ocurre durante el día.', 409);
-      if (body.playerId !== null) { const p = alive(game, body.playerId); p.alive = false; event(game, `${p.name} fue eliminado por la aldea.`); }
-      else event(game, 'La aldea no eliminó a nadie.');
-      checkWinner(game); if (!game.winner) nextNight(game); break;
+    case 'approve': lobby(game); requireThat(find(game, body.playerId), 'Jugador inexistente.'); find(game, body.playerId).approved = true; break;
+    case 'lock': lobby(game); requireThat(typeof body.open === 'boolean', 'Estado inválido.'); game.joinOpen = body.open; break;
+    case 'remove': lobby(game); requireThat(find(game, body.playerId), 'Jugador inexistente.'); game.players = game.players.filter(p => p.id !== body.playerId); break;
+    case 'start': lobby(game); deal(game, validDeck(game, body.roles)); break;
+    case 'redeal': requireThat(game.phase === 'dealt', 'Primero reparte las cartas.', 409); deal(game, game.deck); break;
+    case 'reset': requireThat(game.phase === 'dealt', 'Aún no se repartieron cartas.', 409); game.phase = 'lobby'; game.joinOpen = true; game.players.forEach(p => { p.role = 'villager'; p.alive = true; }); break;
+    case 'eliminate': {
+      requireThat(game.phase === 'dealt', 'Primero reparte las cartas.', 409);
+      requireThat(find(game, body.playerId) && typeof body.alive === 'boolean', 'Selecciona un jugador.');
+      find(game, body.playerId).alive = body.alive; break;
     }
     default: throw new GameError('Acción desconocida.');
   }
   game.revision++;
   return game;
 }
+
 export function view(game, host, viewer) {
-  const started = game.phase !== 'lobby';
-  const result = {
-    title: game.title, victory: game.victory, phase: game.phase, joinOpen: game.joinOpen !== false, round: game.round, revision: game.revision, winner: game.winner,
-    players: game.players.map(p => ({ id: p.id, name: p.name, alive: p.alive, approved: p.approved !== false, ...(host || (started && viewer?.approved !== false && (!p.alive || game.winner || viewer?.id === p.id)) ? { role: p.role } : {}), ...(host ? { token: p.token } : {}) })),
-    events: game.events,
-    ...(host ? { inspections: game.inspections, pendingVictim: game.pendingVictim } : {}),
-    ...(viewer ? { me: viewer.id } : {})
+  const dealt = game.phase === 'dealt';
+  const trusted = viewer && viewer.approved !== false;
+  return {
+    title: game.title, phase: game.phase, joinOpen: game.joinOpen !== false, revision: game.revision,
+    players: game.players.map(p => ({
+      id: p.id, name: p.name, alive: p.alive, approved: p.approved !== false,
+      // A player sees their own card, plus the cards of eliminated players (as at a real table).
+      ...(host || (dealt && trusted && (!p.alive || viewer.id === p.id)) ? { role: p.role } : {}),
+      ...(host ? { token: p.token } : {})
+    })),
+    ...(!host && viewer ? { me: viewer.id } : {})
   };
-  return result;
 }

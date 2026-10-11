@@ -35,11 +35,9 @@ test('real HTTP auth, simultaneous writes, hidden roles, persistence and expiry'
   assert.equal(playerLobby.data.host, false);
   assert.ok(playerLobby.data.players.every(p => !p.role && !p.token));
   assert.equal((await api(base + path + '/actions', playerToken, { action: 'start', revision: state.revision })).status, 403);
-  await act('role', { playerId: state.players[0].id, role: 'wolf' });
-  await act('role', { playerId: state.players[1].id, role: 'seer' });
-  await act('start');
+  await act('start', { roles: { wolf: 1, seer: 1 } });
   const player = await api(base + path, playerToken);
-  assert.equal(player.data.players[0].role, 'wolf');
+  assert.ok(player.data.players[0].role, 'a player sees their own card');
   assert.equal(player.data.players[1].role, undefined);
   const origin = await fetch(base + path + '/actions', { method: 'POST', headers: { Origin: 'https://evil.example', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(origin.status, 403);
@@ -47,7 +45,7 @@ test('real HTTP auth, simultaneous writes, hidden roles, persistence and expiry'
   await close(server);
   server = createApp({ database, now: () => clock }); base = await listen(server);
   const restored = await api(base + path, token);
-  assert.equal(restored.data.revision, state.revision); assert.equal(restored.data.phase, 'seer');
+  assert.equal(restored.data.revision, state.revision); assert.equal(restored.data.phase, 'dealt');
   clock += 8 * 24 * 60 * 60 * 1000;
   assert.equal((await api(base + path, token)).status, 404);
 });

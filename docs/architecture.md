@@ -1,4 +1,4 @@
-# Arquitectura v0.2
+# Arquitectura v0.3
 
 ## Piezas
 
@@ -8,7 +8,7 @@
 - `src/sqlite.js`: almacenamiento local con la misma interfaz y actualización condicional.
 - `src/server.js`: servidor de desarrollo y alternativa para Docker.
 - `api/index.js`: entrada Node.js para Vercel; no importa SQLite ni escribe en disco.
-- `public/`: interfaz sin framework, con polling cada 5 segundos y pausa al ocultar la pestaña.
+- `public/`: interfaz sin framework, con polling cada 3 segundos y pausa al ocultar la pestaña. Tipografía Nunito autoalojada (`public/fonts`), sin recursos externos.
 
 ## API
 
@@ -22,9 +22,9 @@
 | `POST /api/games/:code/actions` | Narrador | Aplica acción con revisión esperada |
 | `POST /api/games/:code/qr` | Narrador | Genera un QR de sala o de carta, sin servicios externos |
 
-Crear sala acepta `title` y `victory` (`elimination` o `parity`). Ingreso acepta `name` y un `token` opcional de 256 bits generado por el cliente. Usar el mismo token hace idempotente el reintento de ingreso, incluso después de cerrar el lobby. Esto no permite obtener una carta por nombre.
+Crear sala acepta `title`. Ingreso acepta `name` y un `token` opcional de 256 bits generado por el cliente; usar el mismo token hace idempotente el reintento.
 
-Acciones: `add` con `name`; `remove`, `approve` e `inspect` con `playerId`; `role` con `playerId` y `role`; `shuffle` con `wolves`; `lock` con `open`; `start`; `hunt` con `playerId`; `dawn`; `vote` con `playerId` o `null`. Solo el endpoint de ingreso puede ejecutar el registro público. Todas las acciones del narrador requieren `revision`.
+Acciones del narrador (todas con `revision`): en sala `add`, `remove`, `approve`, `lock`, `start` (con `roles`: lobos y cartas especiales; los aldeanos completan). Con cartas repartidas (`phase: dealt`): `eliminate` (marca vivo/eliminado), `redeal` (baraja el mismo mazo) y `reset` (vuelve a la sala). La app no modela la noche ni la votación: las dirige el narrador en persona.
 
 ## Concurrencia y persistencia
 

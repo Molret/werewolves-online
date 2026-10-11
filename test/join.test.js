@@ -25,9 +25,8 @@ test('code entry, approvals, private QR, locked rooms and idempotent joins', asy
   await act('lock', { open: false });
   assert.equal((await call(`${path}/join`, null, { name: 'Late' })).status, 409);
   for (const name of ['Dos','Tres','Cuatro']) await act('add', { name });
-  await act('shuffle', { wolves: 1 });
-  assert.equal((await act('start')).status, 400);
-  await act('approve', { playerId: joined.data.me }); assert.equal((await act('start')).status, 200);
+  assert.equal((await act('start', { roles: { wolf: 1 } })).status, 400);
+  await act('approve', { playerId: joined.data.me }); assert.equal((await act('start', { roles: { wolf: 1 } })).status, 200);
   assert.equal((await call(`${path}/join`, null, { name: 'Late' })).status, 409);
   assert.equal((await call(`${path}/join`, null, { token: 'a'.repeat(43) })).status, 200);
 });

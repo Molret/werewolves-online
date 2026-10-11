@@ -4,14 +4,13 @@ Cartas digitales para jugar al hombre lobo **en persona**, con un narrador human
 
 ## Jugar
 
-1. Crea una aldea. Tú eres el narrador, no un jugador.
-2. Comparte el código de 8 caracteres, el enlace de invitación o el QR de sala. Cada persona escribe su nombre desde su celular. **Aprueba sus ingresos** desde tu panel.
-3. También puedes agregar jugadores tú mismo y entregarles su enlace o QR privado. No pueden elegir el nombre de otra persona para acceder a su carta.
-4. Asigna los roles manualmente o reparte al azar. Cuando todos estén aprobados y haya una vidente y mayoría de la aldea, inicia la partida.
-5. Cada jugador toca su carta para revelar el rol. Se oculta a los 10 segundos, al cambiar de aplicación o al recibir una actualización de la partida.
-6. Sigue el panel: vidente, lobos, amanecer, debate y votación. La vidente señala a alguien y tú le comunicas el rol discretamente. Los lobos eligen a su víctima en silencio. La votación se hace en persona y tú registras el resultado.
+1. Crea una sala. Tú eres el **narrador**; la narración y la votación las llevas en persona, la app solo reparte cartas.
+2. Muestra el **QR** o comparte el código de 8 caracteres. Cada persona escribe su nombre y tú la aceptas. Para quien no tiene celular, agrégala tú y usa **Ver carta** o su QR privado.
+3. Elige cuántos lobos hay y qué cartas especiales entran (vidente, bruja, cazador, niña, Cupido). Los aldeanos completan el resto. Toca **Repartir cartas**.
+4. Cada jugador toca su carta para verla; se oculta sola a los 10 segundos, al cambiar de app o con Escape.
+5. Opcional: marca con 💀 a los eliminados (su carta se vuelve pública). **Repartir de nuevo** baraja otra vez con el mismo mazo y los mismos QR; **Volver a la sala** permite cambiar el mazo.
 
-El QR de sala es público y solo permite **solicitar ingreso**. El QR de carta y el enlace de narrador son credenciales privadas. Guarda tu enlace de narrador y no lo compartas con el grupo. El navegador recuerda la última sala; si pierdes el enlace y borras esa sesión, no hay recuperación por cuenta.
+El QR de sala es público y solo permite **pedir ingreso**. El QR de carta y el enlace de narrador son credenciales privadas: guarda tu enlace de narrador. No hay recuperación por cuenta.
 
 ## Desarrollo local
 
