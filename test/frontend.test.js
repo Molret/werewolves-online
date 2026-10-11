@@ -56,13 +56,13 @@ test('QR invitation lands in the waiting-for-approval screen', async t => {
   assert.match(w.document.querySelector('#app').textContent, /Esperando al narrador/);
   assert.ok(!w.document.querySelector('#card'));
 });
-test('practice room: deal, private card flip, black night screen and a full game on the narrator UI', async t => {
+test('practice room: deal, private card flip, eliminate, redeal and back to the lobby', async t => {
   const handle = setup(t);
   const w = browser(t, handle, '/demo');
   await until(() => w.document.querySelector('[data-act=start]'));
   assert.equal(w.document.querySelectorAll('.player-row').length, 8);
   click(w, '[data-act=start]');
-  await until(() => w.document.querySelector('[data-act=sleep]'));
+  await until(() => w.document.querySelector('[data-act=redeal]'));
   const { code, token } = JSON.parse(w.localStorage.getItem('werewolves.session'));
   const players = (await (await handle(new Request(`https://game.example/api/games/${code}`, { headers: { Authorization: `Bearer ${token}` } }), 'x')).json()).players;
   const phone = browser(t, handle, `/#${code}/${players[0].token}`);
@@ -71,24 +71,10 @@ test('practice room: deal, private card flip, black night screen and a full game
   click(phone, '#card'); assert.equal(phone.document.querySelector('#card').getAttribute('aria-pressed'), 'true');
   phone.document.dispatchEvent(new phone.KeyboardEvent('keydown', { key: 'Escape' }));
   assert.equal(phone.document.querySelector('#card').getAttribute('aria-pressed'), 'false');
-  click(w, '[data-act=sleep]');
-  await until(() => w.document.querySelector('.step-title'));
-  // Drive the narrator UI to the end: pick the first valid tile (or the single button) at every step.
-  for (let i = 0; i < 250 && !w.document.querySelector('[data-act=rematch]'); i++) {
-    const before = w.document.querySelector('#app').innerHTML;
-    const q = s => w.document.querySelector(s);
-    if (q('[data-act=seerDone]')) click(w, '[data-act=seerDone]');
-    else if (q('[data-act=dawn]')) click(w, '[data-act=dawn]');
-    else if (q('[data-act=toggleHeal]')) click(w, '[data-act=confirm]');
-    else if (q('.tile[data-act=pick]')) {
-      const need = q('.step-title h2')?.textContent === 'Cupido' ? 2 : 1;
-      const tiles = [...w.document.querySelectorAll('.tile[data-act=pick]')];
-      for (let k = 0; k < need; k++) tiles[k].dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-      click(w, '[data-act=confirm]');
-    }
-    await until(() => w.document.querySelector('#app').innerHTML !== before);
-  }
-  assert.ok(w.document.querySelector('[data-act=rematch]'), 'game reaches a winner');
-  click(w, '[data-act=rematch]');
+  click(w, '[data-act=toggleDead]');
+  await until(() => w.document.querySelector('.player-row.dead'));
+  click(w, '[data-act=redeal]');
+  await until(() => !w.document.querySelector('.player-row.dead'));
+  click(w, '[data-act=reset]');
   await until(() => w.document.querySelector('[data-act=start]'));
 });

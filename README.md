@@ -4,12 +4,11 @@ Cartas digitales para jugar al hombre lobo **en persona**, con un narrador human
 
 ## Jugar
 
-1. Crea una aldea. Tú eres el **narrador** (anfitrión), no un jugador.
-2. Muestra el **QR** o comparte el código de 8 caracteres. Cada persona escribe su nombre desde su celular y tú la aceptas. Para quien no tiene celular, agrégala tú y préstale el tuyo (o entrégale su QR de carta).
-3. Elige las cartas: lobos, vidente, bruja, cazador, niña y Cupido. Los aldeanos completan el resto y el reparto es aleatorio.
+1. Crea una sala. Tú eres el **narrador**; la narración y la votación las llevas en persona, la app solo reparte cartas.
+2. Muestra el **QR** o comparte el código de 8 caracteres. Cada persona escribe su nombre y tú la aceptas. Para quien no tiene celular, agrégala tú y usa **Ver carta** o su QR privado.
+3. Elige cuántos lobos hay y qué cartas especiales entran (vidente, bruja, cazador, niña, Cupido). Los aldeanos completan el resto. Toca **Repartir cartas**.
 4. Cada jugador toca su carta para verla; se oculta sola a los 10 segundos, al cambiar de app o con Escape.
-5. De noche todos los celulares quedan **oscuros** (nadie sabe qué rol despierta). Sigue el guion en pantalla: Cupido, vidente, lobos, bruja, amanecer. De día, la aldea vota en voz alta y tú registras el resultado. El cazador dispara al morir y los enamorados mueren juntos.
-6. ¿Te equivocaste de toque? **Deshacer** revierte el último paso. Al terminar, **Jugar otra vez** reparte nuevas cartas con los mismos QR.
+5. Opcional: marca con 💀 a los eliminados (su carta se vuelve pública). **Repartir de nuevo** baraja otra vez con el mismo mazo y los mismos QR; **Volver a la sala** permite cambiar el mazo.
 
 El QR de sala es público y solo permite **pedir ingreso**. El QR de carta y el enlace de narrador son credenciales privadas: guarda tu enlace de narrador. No hay recuperación por cuenta.
 

@@ -39,14 +39,13 @@ test('real HTTP auth, simultaneous writes, hidden roles, persistence and expiry'
   const player = await api(base + path, playerToken);
   assert.ok(player.data.players[0].role, 'a player sees their own card');
   assert.equal(player.data.players[1].role, undefined);
-  assert.equal(player.data.mine !== undefined, true);
   const origin = await fetch(base + path + '/actions', { method: 'POST', headers: { Origin: 'https://evil.example', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(origin.status, 403);
   const document = await fetch(base); assert.equal(document.status, 200); assert.ok(document.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
   await close(server);
   server = createApp({ database, now: () => clock }); base = await listen(server);
   const restored = await api(base + path, token);
-  assert.equal(restored.data.revision, state.revision); assert.equal(restored.data.phase, 'reveal');
+  assert.equal(restored.data.revision, state.revision); assert.equal(restored.data.phase, 'dealt');
   clock += 8 * 24 * 60 * 60 * 1000;
   assert.equal((await api(base + path, token)).status, 404);
 });

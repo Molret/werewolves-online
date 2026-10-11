@@ -1,4 +1,4 @@
-// Aldea de Lobos — single-file vanilla client. Sections: data, helpers, screens, host, player, events, boot.
+// Aldea de Lobos — vanilla client. The narrator deals cards; every phone shows its owner's card.
 
 /* ───────────── Data ───────────── */
 
@@ -12,22 +12,6 @@ const ROLE = {
   girl: { name: 'Niña', emoji: '👧', team: 'aldea', text: 'Puedes espiar a los lobos entre tus dedos… pero si te descubren, mueres.', hint: 'Puede espiar a los lobos (con riesgo).' }
 };
 const SPECIALS = ['seer', 'witch', 'hunter', 'girl', 'cupid'];
-const NIGHT = ['cupid', 'seer', 'wolves', 'witch', 'dawn'];
-const STEP = {
-  cupid: { icon: '💘', title: 'Cupido', script: 'Cupido, abre los ojos y señala a dos personas que se enamorarán. Cupido, duerme. Los enamorados abren los ojos, se miran y vuelven a dormir.', hint: 'Elige a dos jugadores.' },
-  seer: { icon: '🔮', title: 'La vidente', script: 'La vidente abre los ojos y señala a alguien. Le mostrarás su carta en silencio. Vidente, duerme.', hint: 'Elige a quien quiere espiar.' },
-  wolves: { icon: '🐺', title: 'Los lobos', script: 'Los hombres lobo despiertan, se reconocen y señalan en silencio a su víctima. Lobos, duerman.', hint: 'Elige la víctima de esta noche.' },
-  witch: { icon: '🧪', title: 'La bruja', script: 'La bruja abre los ojos. Esta es la víctima de la noche: ¿quieres salvarla? ¿Quieres envenenar a alguien? Bruja, duerme.', hint: 'Muéstrale en silencio la víctima.' },
-  dawn: { icon: '🌅', title: 'Amanecer', script: 'Sale el sol. Todos abren los ojos… menos quien haya muerto durante la noche.', hint: '' },
-  hunter: { icon: '🏹', title: 'Último disparo', script: 'El cazador ha caído, pero aún tiene una bala. ¿A quién dispara?', hint: 'Elige el objetivo.' },
-  day: { icon: '☀️', title: 'Debate y votación', script: 'La aldea discute y señala a un culpable. El más votado es eliminado. Si hay empate, repitan entre los empatados.', hint: 'Elige el resultado de la votación.' }
-};
-const WINNER = {
-  village: { emoji: '🏡', title: '¡Ganó la aldea!', text: 'Todos los lobos fueron descubiertos.' },
-  wolves: { emoji: '🐺', title: '¡Ganaron los lobos!', text: 'La manada devoró a la aldea.' },
-  lovers: { emoji: '💘', title: '¡Ganaron los enamorados!', text: 'El amor venció a los dos bandos.' },
-  nobody: { emoji: '💀', title: 'Nadie sobrevivió', text: 'La aldea quedó vacía.' }
-};
 
 /* ───────────── Helpers ───────────── */
 
@@ -40,7 +24,7 @@ let state = null;     // last server view
 let ui = fresh();     // client-only state (selection, deck, QR…)
 let animateNext = true, busy = false, pollTimer, revealTimer, toastTimer, wakeLock;
 
-function fresh() { return { sel: [], key: '', heal: false, deck: null, touched: false, qr: null, revealed: false, offline: 0 }; }
+function fresh() { return { key: '', deck: null, touched: false, qr: null, revealed: false, offline: 0 }; }
 function remember(value) { try { localStorage.setItem('werewolves.session', JSON.stringify(value)); } catch { /* private mode */ } }
 function remembered() { try { return JSON.parse(localStorage.getItem('werewolves.session')); } catch { return null; } }
 function forget() { try { localStorage.removeItem('werewolves.session'); } catch { /* ignore */ } }
@@ -71,7 +55,6 @@ async function request(path, options = {}) {
 const link = token => `${location.origin}/#${session.code}/${token}`;
 const inviteLink = () => `${location.origin}/#join/${session.code}`;
 const player = id => state.players.find(p => p.id === id);
-const alive = () => state.players.filter(p => p.alive);
 const colorOf = id => `c${Math.max(0, state.players.findIndex(p => p.id === id)) % 8}`;
 const avatar = (p, badge = '') => `<span class="avatar ${colorOf(p.id)}" aria-hidden="true">${esc(p.name.trim().charAt(0).toUpperCase())}${badge ? `<span class="badge">${badge}</span>` : ''}</span>`;
 async function copy(text, message = 'Enlace copiado.') {
@@ -148,60 +131,27 @@ function failure(error) {
 
 function render() {
   if (!state) return;
-  const key = `${state.phase}:${state.round}`;
-  if (key !== ui.key) { animateNext = true; ui.key = key; ui.sel = []; ui.heal = false; ui.revealed = false; clearTimeout(revealTimer); }
-  const view = session && state.host ? renderHost : renderPlayer;
-  view();
+  if (state.phase !== ui.key) { animateNext = true; ui.key = state.phase; ui.revealed = false; clearTimeout(revealTimer); }
+  (state.host ? renderHost : renderPlayer)();
   if (state.host && !wakeLock) keepAwake();
 }
 
 /* ───────────── Narrator (host) ───────────── */
 
-function selectable(phase) {
-  const open = alive();
-  if (phase === 'seer') return open.filter(p => p.role !== 'seer');
-  if (phase === 'wolves') return open.filter(p => p.role !== 'wolf');
-  return open;
-}
-function tiles(list, { none = '' } = {}) {
-  return `<div class="grid">${list.map(p => `
-    <button class="tile ${ui.sel.includes(p.id) ? 'sel' : ''}" data-act="pick" data-id="${p.id}" aria-pressed="${ui.sel.includes(p.id)}">
-      ${avatar(p, ROLE[p.role]?.emoji)}<span>${esc(p.name)}</span>
-    </button>`).join('')}
-    ${none ? `<button class="tile ${ui.sel.includes('none') ? 'sel' : ''}" data-act="pick" data-id="none" aria-pressed="${ui.sel.includes('none')}"><span class="avatar c7" aria-hidden="true">∅</span><span>${none}</span></button>` : ''}
-  </div>`;
-}
-const bubble = (key, extra = '') => `<div class="bubble"><span class="speaker" aria-hidden="true">🎙️</span><q>${STEP[key].script}</q>${STEP[key].hint ? `<p class="hint">${STEP[key].hint}${extra}</p>` : ''}</div>`;
-const stepHead = (key, label) => `<div class="step-title"><span class="step-icon" aria-hidden="true">${STEP[key].icon}</span><div><small>${label}</small><h2>${STEP[key].title}</h2></div></div>`;
-const barButton = (act, label, { cls = '', disabled = false, extra = '' } = {}) => `<button class="btn btn-big btn-block ${cls}" data-act="${act}" ${disabled ? 'disabled' : ''} ${extra}>${label}</button>`;
-const names = ids => ids.map(id => esc(player(id)?.name ?? '?')).join(' y ');
+const alive = () => state.players.filter(p => p.alive);
+const barButton = (act, label, { cls = '', disabled = false } = {}) => `<button class="btn btn-big btn-block ${cls}" data-act="${act}" ${disabled ? 'disabled' : ''}>${label}</button>`;
 
-function chronicle() {
-  const items = [...state.events].reverse().map(e => `<li><small>${e.round ? `Noche ${e.round}` : 'Inicio'}</small><span>${esc(e.text)}</span></li>`).join('');
-  return `<details class="card"><summary>📜 Crónica de la aldea</summary><ul class="log">${items || '<li class="muted">Todavía no pasó nada.</li>'}</ul></details>`;
-}
-function rosterCard() {
-  return `<details class="card"><summary>👥 Aldeanos (${alive().length} vivos de ${state.players.length})</summary>
-    <div class="grid">${state.players.map(p => `<div class="tile static ${p.alive ? '' : 'dead'}">${avatar(p, ROLE[p.role]?.emoji)}<span>${esc(p.name)}<br><small class="muted">${ROLE[p.role]?.name ?? ''}${p.alive ? '' : ' · eliminado'}</small></span></div>`).join('')}</div></details>`;
-}
 function hostFooter() {
-  return `${state.phase !== 'lobby' ? rosterCard() : ''}${state.phase !== 'lobby' ? chronicle() : ''}
-    <section class="card"><h3>🔑 Tu enlace de narrador</h3><p class="fine">Es tu llave. Si cierras el navegador sin guardarlo, no podrás volver a dirigir esta partida.</p>
+  return `<section class="card"><h3>🔑 Tu enlace de narrador</h3><p class="fine">Es tu llave. Si cierras el navegador sin guardarlo, no podrás volver a manejar esta sala.</p>
     <div class="row"><button class="btn btn-sm" data-act="copyHost">Copiar mi enlace</button><button class="btn btn-sm btn-white" data-act="leave">Salir de la sala</button></div></section>`;
 }
 function topHead(label) {
-  return `<div class="row between on-sky"><div><h1>${esc(state.title)}</h1><p class="muted">${label}</p></div>
-    <div class="row"><span class="pill sun">Sala ${state.code}</span>${state.canUndo && state.phase !== 'lobby' ? '<button class="btn btn-sm btn-white" data-act="undo">↩ Deshacer</button>' : ''}</div></div>`;
+  return `<div class="row between on-sky"><div><h1>${esc(state.title)}</h1><p class="muted">${label}</p></div><span class="pill sun">Sala ${state.code}</span></div>`;
 }
-
 function renderHost() {
-  const { phase } = state;
-  const night = NIGHT.includes(phase);
-  const draw = { lobby: hostLobby, reveal: hostReveal, day: hostPick, hunter: hostPick, cupid: hostPick, seer: hostSeer, wolves: hostWolves, witch: hostWitch, dawn: hostDawn, finished: hostFinished }[phase];
-  const { body, bar = '' } = draw();
-  const label = phase === 'lobby' ? 'Preparando la aldea' : phase === 'finished' ? 'Partida terminada' : phase === 'reveal' ? '🃏 Reparto de cartas' : `${night ? '🌙 Noche' : '☀️ Día'} ${state.round}`;
-  setMain(`<div class="stack">${topHead(label)}${body}${hostFooter()}</div>`, { bar, night, bare: true });
-  if (phase === 'lobby') loadQr();
+  const { body, bar = '' } = state.phase === 'lobby' ? hostLobby() : hostDealt();
+  setMain(`<div class="stack">${topHead(state.phase === 'lobby' ? 'Preparando la aldea' : '🃏 Cartas repartidas')}${body}${hostFooter()}</div>`, { bar, bare: true });
+  if (state.phase === 'lobby') loadQr();
 }
 
 /* — Lobby — */
@@ -211,10 +161,8 @@ function suggest(n) {
 }
 function deckProblem(n, deck, pending) {
   if (pending) return `Aprueba o quita a ${pending} jugador${pending > 1 ? 'es' : ''} pendiente${pending > 1 ? 's' : ''}.`;
-  if (n < 4) return `Faltan ${4 - n} jugador${4 - n > 1 ? 'es' : ''} (mínimo 4).`;
-  const special = SPECIALS.reduce((sum, r) => sum + deck[r], 0) + deck.wolf;
-  if (special > n) return 'Hay más cartas especiales que jugadores.';
-  if (deck.wolf >= n - deck.wolf) return 'Demasiados lobos: deben ser menos que el resto.';
+  if (n < 3) return `Faltan ${3 - n} jugador${3 - n > 1 ? 'es' : ''} (mínimo 3).`;
+  if (deck.wolf + SPECIALS.reduce((sum, r) => sum + deck[r], 0) > n) return 'Hay más cartas especiales que jugadores.';
   return '';
 }
 function hostLobby() {
@@ -224,16 +172,16 @@ function hostLobby() {
   const problem = deckProblem(n, deck, pending);
   const rows = state.players.map(p => `
     <div class="player-row">${avatar(p)}
-      <div class="who"><strong>${esc(p.name)}</strong><small class="muted">${p.approved ? 'Listo para jugar' : '⏳ Pide entrar'}</small></div>
+      <div class="who"><strong>${esc(p.name)}</strong><small class="muted">${p.approved ? 'Listo' : '⏳ Pide entrar'}</small></div>
       <div class="actions">
-        ${p.approved ? `<button class="btn btn-sm btn-white" data-act="playerQr" data-id="${p.id}" aria-label="Carta de ${esc(p.name)}">📱 Carta</button>` : `<button class="btn btn-sm btn-green" data-act="approve" data-id="${p.id}">✓ Aceptar</button>`}
+        ${p.approved ? `<button class="btn btn-sm btn-white" data-act="playerQr" data-id="${p.id}" aria-label="QR de ${esc(p.name)}">📱 QR</button>` : `<button class="btn btn-sm btn-green" data-act="approve" data-id="${p.id}">✓ Aceptar</button>`}
         <button class="btn btn-sm btn-white" data-act="remove" data-id="${p.id}" aria-label="Quitar a ${esc(p.name)}">✕</button>
       </div>
     </div>`).join('');
   const deckRows = `
-    <div class="deck-row on"><span class="emoji">🐺</span><div class="info"><strong>Hombres lobo</strong><small>Cazan de noche</small></div>
+    <div class="deck-row on"><span class="emoji">🐺</span><div class="info"><strong>Hombres lobo</strong></div>
       <div class="stepper"><button class="btn" data-act="wolves" data-delta="-1" aria-label="Menos lobos">−</button><b>${deck.wolf}</b><button class="btn" data-act="wolves" data-delta="1" aria-label="Más lobos">+</button></div></div>
-    ${SPECIALS.map(r => `<div class="deck-row ${deck[r] ? 'on' : ''}"><span class="emoji">${ROLE[r].emoji}</span><div class="info"><strong>${ROLE[r].name}</strong><small>${ROLE[r].hint}</small></div>
+    ${SPECIALS.map(r => `<div class="deck-row ${deck[r] ? 'on' : ''}"><span class="emoji">${ROLE[r].emoji}</span><div class="info"><strong>${ROLE[r].name}</strong></div>
       <button class="btn switch" data-act="toggleRole" data-role="${r}" aria-pressed="${Boolean(deck[r])}">${deck[r] ? 'Sí' : 'No'}</button></div>`).join('')}`;
   const body = `
     <div class="two">
@@ -242,17 +190,16 @@ function hostLobby() {
         <div class="qr" id="qr-box">${ui.qr ? `<img src="${ui.qr}" alt="Código QR para unirse a la sala ${state.code}">` : '<span class="muted">Generando QR…</span>'}</div>
         <div class="code" aria-label="Código de sala">${state.code}</div>
         <div class="row"><button class="btn btn-sm" data-act="copyInvite">Copiar enlace</button><button class="btn btn-sm btn-white" data-act="share">Compartir</button></div>
-        <p class="fine">Quien escanee escribe su nombre y tú lo aceptas. El QR solo permite pedir entrada.</p>
+        <p class="fine">Quien escanee escribe su nombre y tú lo aceptas.</p>
       </section>
       <section class="card">
-        <div class="card-head"><h3>👥 Jugadores (${n}/18)</h3><span class="pill ${n >= 4 ? 'green' : ''}">mín. 4</span></div>
+        <div class="card-head"><h3>👥 Jugadores (${n}/18)</h3></div>
         ${rows || '<p class="empty">Aún no hay nadie. ¡Muestra el QR!</p>'}
         <form id="add" class="row"><input name="name" placeholder="Agregar sin celular…" maxlength="40" autocomplete="off" aria-label="Nombre del jugador"><button class="btn btn-sm btn-green" type="submit">Agregar</button></form>
       </section>
     </div>
     <section class="card">
-      <h3>🃏 Reparto de cartas</h3>
-      <p class="muted">Se reparten al azar. Los aldeanos completan el resto.</p>
+      <h3>🃏 Cartas a repartir</h3>
       <div class="deck">${deckRows}</div>
       <div class="summary"><span class="pill grape">${n} jugadores</span><span class="pill red">🐺 ${deck.wolf}</span>${SPECIALS.filter(r => deck[r]).map(r => `<span class="pill sun">${ROLE[r].emoji} 1</span>`).join('')}<span class="pill green">🧑‍🌾 ${Math.max(0, villagers)}</span></div>
     </section>`;
@@ -263,150 +210,56 @@ async function loadQr() {
   if (ui.qr || ui.qrLoading) return;
   ui.qrLoading = true;
   try { const data = await request(`/api/games/${session.code}/qr`, { method: 'POST', body: '{}' }); ui.qr = data.image; const box = $('#qr-box'); if (box) box.innerHTML = `<img src="${esc(ui.qr)}" alt="Código QR para unirse a la sala ${state.code}">`; }
-  catch (error) { const box = $('#qr-box'); if (box) box.innerHTML = `<span class="muted">No se pudo generar el QR. Comparte el código.</span>`; }
+  catch { const box = $('#qr-box'); if (box) box.innerHTML = '<span class="muted">No se pudo generar el QR. Comparte el código.</span>'; }
   finally { ui.qrLoading = false; }
 }
 
-/* — Reveal — */
+/* — Dealt — */
 
-function hostReveal() {
-  const rows = state.players.map(p => `<div class="player-row">${avatar(p)}<div class="who"><strong>${esc(p.name)}</strong></div><button class="btn btn-sm btn-white" data-act="showCard" data-id="${p.id}">Ver su carta aquí</button></div>`).join('');
+function hostDealt() {
+  const rows = state.players.map(p => `
+    <div class="player-row ${p.alive ? '' : 'dead'}">${avatar(p, ROLE[p.role].emoji)}
+      <div class="who"><strong>${esc(p.name)}</strong><small class="muted">${ROLE[p.role].name}${p.alive ? '' : ' · eliminado'}</small></div>
+      <div class="actions"><button class="btn btn-sm btn-white" data-act="showCard" data-id="${p.id}">Ver carta</button>
+      <button class="btn btn-sm ${p.alive ? 'btn-white' : 'btn-green'}" data-act="toggleDead" data-id="${p.id}" aria-label="${p.alive ? 'Eliminar' : 'Revivir'} a ${esc(p.name)}">${p.alive ? '💀' : '↩'}</button></div>
+    </div>`).join('');
   const body = `
-    <section class="card sun center"><h2>🃏 ¡Cartas repartidas!</h2>
-      <p>Cada jugador toca su carta en su celular, la mira en secreto y bloquea la pantalla. Cuando todos estén listos, empieza la noche.</p></section>
-    <section class="card"><h3>¿Alguien sin celular?</h3><p class="muted">Préstale este: tú ves su carta y se la pasas para que la mire solo.</p>${rows}</section>`;
-  return { body, bar: barButton('sleep', 'Todos listos: ¡a dormir! 🌙', { cls: 'btn-grape' }) };
-}
-
-/* — Night / day picks — */
-
-function confirmLabel() {
-  const first = ui.sel[0];
-  const who = first && first !== 'none' ? esc(player(first)?.name ?? '') : '';
-  switch (state.phase) {
-    case 'cupid': return ui.sel.length === 2 ? `Enamorar a ${names(ui.sel)} 💘` : `Elige a ${2 - ui.sel.length} más`;
-    case 'seer': return who ? `Espiar a ${who} 🔮` : 'Elige a alguien';
-    case 'wolves': return who ? `Atacar a ${who} 🐺` : 'Elige una víctima';
-    case 'hunter': return first === 'none' ? 'El cazador no dispara' : who ? `Disparar a ${who} 🏹` : 'Elige el objetivo';
-    case 'day': return first === 'none' ? 'Nadie es eliminado' : who ? `Eliminar a ${who} ⚖️` : 'Elige quién sale';
-    default: return 'Continuar';
-  }
-}
-function hostPick(before = '') {
-  const { phase } = state;
-  const ready = phase === 'cupid' ? ui.sel.length === 2 : ui.sel.length === 1;
-  const hunter = phase === 'hunter' ? player(state.hunter) : null;
-  const list = phase === 'hunter' ? alive() : selectable(phase);
-  const dayInfo = phase === 'day' ? state.events.filter(e => e.playerId && e.round === state.round).map(e => `<li>${esc(e.text)}</li>`).join('') : '';
-  const body = `
-    ${stepHead(phase, phase === 'day' ? `Día ${state.round}` : `Noche ${state.round}`)}
-    ${dayInfo ? `<section class="card alert"><h3>☀️ Esta mañana…</h3><ul class="log">${dayInfo}</ul></section>` : ''}
-    ${hunter ? `<section class="card alert"><p><strong>${esc(hunter.name)}</strong> era el cazador.</p></section>` : ''}
-    ${bubble(phase)}
-    ${before}
-    <section class="card">${tiles(list, { none: phase === 'day' ? 'Nadie (empate)' : phase === 'hunter' ? 'No dispara' : '' })}</section>`;
-  return { body, bar: barButton('confirm', confirmLabel(), { cls: phase === 'day' ? 'btn-red' : 'btn-grape', disabled: !ready }) };
-}
-function hostSeer() {
-  if (state.seen) {
-    const seen = player(state.seen), role = ROLE[seen.role];
-    const body = `
-      ${stepHead('seer', `Noche ${state.round}`)}
-      <section class="card sun center"><p class="muted">Enséñale esto solo a la vidente</p>
-        <div class="status"><span class="emoji">${role.emoji}</span><h1>${esc(seen.name)}</h1><p><span class="pill ${role.team === 'lobos' ? 'red' : 'green'}">${role.name} · ${role.team === 'lobos' ? 'es un lobo' : 'es de la aldea'}</span></p></div></section>`;
-    return { body, bar: barButton('seerDone', 'La vidente duerme →', { cls: 'btn-grape' }) };
-  }
-  return hostPick();
-}
-function hostWolves() {
-  const girl = alive().find(p => p.role === 'girl');
-  const caught = girl ? `<section class="card"><p>¿La niña espió y la descubrieron?</p><button class="btn btn-sm btn-red" data-act="caught">👧 Descubrieron a ${esc(girl.name)}</button></section>` : '';
-  return hostPick(caught);
-}
-function hostWitch() {
-  const victim = player(state.pendingVictim);
-  const heal = state.potions.heal && victim;
-  const poisonable = state.potions.poison;
-  const body = `
-    ${stepHead('witch', `Noche ${state.round}`)}
-    ${bubble('witch')}
-    <section class="card sun"><h3>🩸 Víctima de los lobos</h3><div class="grid"><div class="tile static">${victim ? avatar(victim) : ''}<span>${esc(victim?.name ?? 'Nadie')}</span></div></div>
-      ${heal ? `<button class="btn btn-block ${ui.heal ? 'btn-green' : 'btn-white'}" data-act="toggleHeal" aria-pressed="${ui.heal}">${ui.heal ? '💚 La bruja la salva' : '💚 Poción de vida: salvar'}</button>` : '<p class="muted">Poción de vida: ya usada.</p>'}</section>
-    <section class="card"><h3>☠️ Poción de muerte</h3>${poisonable ? `<p class="muted">Opcional: toca a quien quiera envenenar.</p>${tiles(alive())}` : '<p class="muted">Ya usada.</p>'}</section>`;
-  const label = ui.heal && ui.sel[0] ? 'Salvar y envenenar' : ui.heal ? 'Salvar a la víctima' : ui.sel[0] ? `Envenenar a ${esc(player(ui.sel[0])?.name ?? '')}` : 'La bruja no hace nada';
-  return { body, bar: barButton('confirm', `${label} →`, { cls: 'btn-grape' }) };
-}
-function hostDawn() {
-  const victim = player(state.pendingVictim);
-  const body = `
-    ${stepHead('dawn', `Noche ${state.round}`)}
-    ${bubble('dawn')}
-    <section class="card"><h3>Lo que pasó esta noche (solo tú lo ves)</h3>
-      <p>🐺 Los lobos atacaron a <strong>${esc(victim?.name ?? 'nadie')}</strong>.</p>
-      ${state.potions.heal || state.potions.poison ? '<p class="muted">La bruja aún conserva alguna poción.</p>' : ''}
-      <p class="muted">Al anunciar el amanecer se aplican las muertes y todos verán quién cayó.</p></section>`;
-  return { body, bar: barButton('dawn', 'Anunciar el amanecer ☀️', { cls: 'btn-red' }) };
-}
-
-/* — Finished — */
-
-function hostFinished() {
-  const w = WINNER[state.winner];
-  const rows = state.players.map(p => `<div class="tile static ${p.alive ? '' : 'dead'}">${avatar(p, ROLE[p.role].emoji)}<span>${esc(p.name)}<br><small class="muted">${ROLE[p.role].name}</small></span></div>`).join('');
-  const body = `
-    <section class="card sun center status"><span class="emoji winner">${w.emoji}</span><h1>${w.title}</h1><p>${w.text}</p></section>
-    <section class="card"><h3>Las cartas reveladas</h3><div class="grid">${rows}</div></section>
-    ${chronicle()}`;
-  return { body, bar: `${barButton('rematch', 'Jugar otra vez 🔄', { cls: 'btn-green' })}<p class="hint">Mismos jugadores y mismos QR. Solo se reparten cartas nuevas.</p>` };
+    <section class="card sun"><h3>Cada quien ya tiene su carta</h3><p>Tocan su carta en su celular para verla. Esta lista es solo para ti: no la muestres.</p>
+      <p class="fine"><strong>Ver carta</strong> sirve para quien no tiene celular. <strong>💀</strong> marca eliminado y revela su carta a los demás.</p></section>
+    <section class="card">${rows}</section>`;
+  const bar = `${barButton('redeal', 'Repartir de nuevo 🔄', { cls: 'btn-green' })}<button class="btn btn-white btn-block" data-act="reset">Volver a la sala</button>`;
+  return { body, bar };
 }
 
 /* ───────────── Player (phone as a card) ───────────── */
 
-function roleCard(p, { shooting, mine = {} } = {}) {
-  const r = ROLE[p.role];
-  const extras = [
-    mine.pack?.length ? `<span class="extra">🐺 Tu manada: ${mine.pack.map(esc).join(', ')}</span>` : '',
-    mine.lover ? `<span class="extra">💘 Enamorado/a de ${esc(mine.lover)}</span>` : ''
-  ].join('');
+function roleCard(p) {
+  const r = ROLE[p.role], open = ui.revealed || !p.alive;
   return `
-    <button class="flip role-${p.role} ${ui.revealed || !p.alive ? 'flipped' : ''} ${p.alive ? '' : 'dead'}" id="card" data-act="flip" aria-pressed="${ui.revealed || !p.alive}" aria-label="Tu carta de rol. Toca para ver u ocultar.">
+    <button class="flip role-${p.role} ${open ? 'flipped' : ''} ${p.alive ? '' : 'dead'}" id="card" data-act="flip" aria-pressed="${open}" aria-label="Tu carta de rol. Toca para ver u ocultar.">
       <span class="flip-inner">
         <span class="face face-front"><span class="big">🌙</span><span class="tap">Toca para ver tu carta</span></span>
-        <span class="face face-back"><span class="big">${r.emoji}</span><h2>${r.name}</h2><p>${r.text}</p>${extras}</span>
+        <span class="face face-back"><span class="big">${r.emoji}</span><h2>${r.name}</h2><p>${r.text}</p></span>
       </span>
-    </button>
-    ${shooting ? '<div class="card alert center"><h3>🏹 ¡Es tu último disparo!</h3><p>Dile en voz alta al narrador a quién disparas.</p></div>' : ''}`;
+    </button>`;
 }
 function playerRoster() {
   return `<div class="grid">${state.players.map(p => `<div class="tile static ${p.alive ? '' : 'dead'} ${p.id === state.me ? 'sel' : ''}">${avatar(p, p.role ? ROLE[p.role].emoji : '')}<span>${esc(p.name)}${p.alive ? '' : '<br><small class="muted">eliminado</small>'}</span></div>`).join('')}</div>`;
 }
 function renderPlayer() {
   const me = player(state.me);
-  const { phase } = state;
   if (!me?.approved) {
-    return setMain(`<section class="card sun status"><span class="emoji">⏳</span><h2>Esperando al narrador</h2><p>Hola, <strong>${esc(me?.name ?? '')}</strong>. El anfitrión tiene que aceptarte para que entres a la aldea.</p></section>`, { bare: true });
+    return setMain(`<section class="card sun status"><span class="emoji">⏳</span><h2>Esperando al narrador</h2><p>Hola, <strong>${esc(me?.name ?? '')}</strong>. El anfitrión tiene que aceptarte para que entres.</p></section>`, { bare: true });
   }
-  if (phase === 'night') {
-    return setMain(`<section class="status sleep"><span class="emoji">🌙</span><h1>Duerme…</h1><p>Cierra los ojos y baja el brillo.<br>El narrador te avisará cuando amanezca.</p></section>`, { night: true, bare: true });
-  }
-  if (phase === 'lobby') {
+  if (state.phase === 'lobby') {
     return setMain(`
       <section class="card sun status"><span class="emoji">🏡</span><h2>¡Ya estás dentro, ${esc(me.name)}!</h2><p>Cuando el narrador reparta las cartas, aparecerá la tuya aquí.</p></section>
       <section class="card"><h3>En la aldea (${state.players.length})</h3>${playerRoster()}</section>`, { bare: true });
   }
-  const info = {
-    reveal: ['🃏', 'Mira tu carta en secreto', 'Tócala, memorízala y bloquea el celular.'],
-    day: ['☀️', `Día ${state.round}`, me.alive ? 'Discutan y voten en voz alta.' : '👻 Eres un fantasma: ya no hablas ni votas.'],
-    hunter: ['🏹', 'El cazador va a disparar', 'Silencio en la aldea…'],
-    finished: () => [WINNER[state.winner].emoji, WINNER[state.winner].title, WINNER[state.winner].text]
-  }[phase];
-  const banner = typeof info === 'function' ? info() : info;
-  const recent = [...state.events].reverse().slice(0, 6).map(e => `<li><small>${e.round ? `Noche ${e.round}` : 'Inicio'}</small><span>${esc(e.text)}</span></li>`).join('');
   setMain(`
-    <section class="card ${phase === 'finished' ? 'sun' : ''} center"><h2>${banner[0]} ${banner[1]}</h2><p class="muted">${banner[2]}</p></section>
-    ${roleCard(me, { shooting: state.mine?.shooting, mine: state.mine })}
+    <section class="card center"><h2>${me.alive ? '🃏 Tu carta' : '👻 Fuiste eliminado'}</h2><p class="muted">${me.alive ? 'Tócala, mírala en secreto y no se la muestres a nadie.' : 'Tu carta ahora es pública.'}</p></section>
+    ${roleCard(me)}
     <section class="card"><h3>La aldea</h3>${playerRoster()}</section>
-    ${recent ? `<section class="card"><h3>📜 Lo que pasó</h3><ul class="log">${recent}</ul></section>` : ''}
     <button class="btn btn-ghost" data-act="leave">Salir de la sala</button>`, { bare: true });
 }
 function flipCard() {
@@ -429,29 +282,10 @@ async function send(action, extra = {}) {
   busy = true; app.classList.add('busy');
   try {
     state = { ...(await request(`/api/games/${session.code}/actions`, { method: 'POST', body: JSON.stringify({ action, revision: state.revision, ...extra }) })) };
-    ui.sel = [];
   } catch (error) {
     toast(error.message);
     try { state = await request(`/api/games/${session.code}`); } catch { /* keep the old view */ }
   } finally { busy = false; app.classList.remove('busy'); render(); }
-}
-function confirmStep() {
-  const first = ui.sel[0] === 'none' ? null : ui.sel[0];
-  const calls = {
-    cupid: ['couple', { playerIds: ui.sel }],
-    seer: ['inspect', { playerId: first }],
-    wolves: ['hunt', { playerId: first }],
-    witch: ['witch', { heal: ui.heal, poisonId: first || null }],
-    hunter: ['shoot', { playerId: first }],
-    day: ['vote', { playerId: first }]
-  };
-  const call = calls[state.phase];
-  if (call) send(...call);
-}
-function pick(id) {
-  if (state.phase === 'cupid') ui.sel = ui.sel.includes(id) ? ui.sel.filter(x => x !== id) : [...ui.sel, id].slice(-2);
-  else ui.sel = ui.sel[0] === id ? [] : [id];
-  render();
 }
 function setDeck(change) {
   ui.deck = { ...ui.deck, ...change }; ui.touched = true; render();
@@ -485,18 +319,12 @@ const ACTIONS = {
   createForm, joinForm: () => joinForm(),
   resume: () => { const s = remembered(); if (s) location.hash = `${s.code}/${s.token}`; },
   leave: () => { if (confirm('¿Salir de esta sala en este celular?')) { forget(); location.hash = ''; home(); } },
-  pick: el => pick(el.dataset.id),
-  confirm: confirmStep,
-  toggleHeal: () => { ui.heal = !ui.heal; render(); },
   wolves: el => setDeck({ wolf: Math.max(1, ui.deck.wolf + Number(el.dataset.delta)) }),
   toggleRole: el => setDeck({ [el.dataset.role]: ui.deck[el.dataset.role] ? 0 : 1 }),
   start: () => send('start', { roles: ui.deck }),
-  sleep: () => send('sleep'),
-  dawn: () => send('dawn'),
-  seerDone: () => send('seerDone'),
-  caught: () => send('caught'),
-  undo: () => send('undo'),
-  rematch: () => { ui.touched = false; send('rematch'); },
+  redeal: () => send('redeal'),
+  reset: () => { ui.touched = false; send('reset'); },
+  toggleDead: el => send('eliminate', { playerId: el.dataset.id, alive: !player(el.dataset.id).alive }),
   approve: el => send('approve', { playerId: el.dataset.id }),
   remove: el => send('remove', { playerId: el.dataset.id }),
   lock: () => send('lock', { open: !state.joinOpen }),
@@ -566,7 +394,7 @@ async function poll() {
     try {
       const data = await request(`/api/games/${session.code}`);
       ui.offline = 0; $('#net').hidden = true;
-      if (data.revision !== state.revision || data.phase !== state.phase) { state = data; render(); }
+      if (data.revision !== state.revision) { state = data; render(); }
     } catch (error) {
       if ([401, 403, 404].includes(error.status)) { stopPolling(); forget(); return failure(new Error('Ya no formas parte de esta aldea (la sala expiró o te quitaron).')); }
       ui.offline++; if (ui.offline > 1) $('#net').hidden = false;

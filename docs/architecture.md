@@ -24,9 +24,7 @@
 
 Crear sala acepta `title`. Ingreso acepta `name` y un `token` opcional de 256 bits generado por el cliente; usar el mismo token hace idempotente el reintento.
 
-Acciones del narrador (todas con `revision`): en sala `add`, `remove`, `approve`, `lock`, `start` (con `roles`: lobos y cartas especiales; los aldeanos completan). En partida: `sleep`, `couple`, `inspect`, `seerDone`, `hunt`, `caught`, `witch`, `dawn`, `shoot`, `vote`. Siempre: `undo` (un nivel, instantánea previa en el estado) y `rematch` (al terminar; conserva jugadores y enlaces).
-
-Fases: `lobby → reveal → [cupid] → [seer] → wolves → [witch] → dawn → [hunter] → day → [hunter] → noche…`. Los celulares ven todas las fases nocturnas como `night` (pantalla oscura) para no filtrar qué rol está despierto. Roles: aldeano, lobo, vidente, bruja, cazador, Cupido y niña.
+Acciones del narrador (todas con `revision`): en sala `add`, `remove`, `approve`, `lock`, `start` (con `roles`: lobos y cartas especiales; los aldeanos completan). Con cartas repartidas (`phase: dealt`): `eliminate` (marca vivo/eliminado), `redeal` (baraja el mismo mazo) y `reset` (vuelve a la sala). La app no modela la noche ni la votación: las dirige el narrador en persona.
 
 ## Concurrencia y persistencia
 
