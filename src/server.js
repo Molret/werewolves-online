@@ -18,7 +18,7 @@ export function createApp({ database = process.env.DB_PATH || './data/werewolves
         const response = await api(request, req.socket.remoteAddress);
         res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(Buffer.from(await response.arrayBuffer())); return;
       }
-      const files = { '/': ['index.html','text/html'], '/app.js': ['app.js','text/javascript'], '/style.css': ['style.css','text/css'], '/favicon.svg': ['favicon.svg','image/svg+xml'] };
+      const files = { '/': ['index.html','text/html'], '/app.js': ['app.js','text/javascript'], '/style.css': ['style.css','text/css'], '/favicon.svg': ['favicon.svg','image/svg+xml'], '/fonts/nunito.woff2': ['fonts/nunito.woff2','font/woff2'] };
       const file = files[url.pathname === '/demo' || url.pathname === '/demo/' ? '/' : url.pathname];
       if (!file || !['GET','HEAD'].includes(req.method)) { res.writeHead(404, securityHeaders); res.end('No encontrado'); return; }
       res.writeHead(200, { ...securityHeaders, 'Content-Type': `${file[1]}; charset=utf-8` });

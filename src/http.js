@@ -30,15 +30,11 @@ export function apiHandler(store, { now = Date.now } = {}) {
       const limit = async (scope, max) => requireThat(await store.limit(`${ip}:${scope}`, max, now()), 'Demasiadas solicitudes. Espera un minuto.', 429);
       if (path === '/api/health' && request.method === 'GET') { await store.get('__health__'); return json({ ok: true, storage: 'persistent' }); }
       if ((path === '/api/games' || path === '/api/demo') && request.method === 'POST') {
-        await limit('create', 10); const input = await body(request); const game = newGame(input.title || 'La aldea', input.victory); const hostToken = token();
+        await limit('create', 10); const input = await body(request); const game = newGame(input.title || 'La aldea'); const hostToken = token();
         const demo = path === '/api/demo';
         if (demo) {
-          game.title = 'La aldea de práctica';
-          for (const [i, name] of ['Luna', 'Bruno', 'Alma', 'Mateo', 'Sofía', 'Leo', 'Emma', 'Nico'].entries()) {
-            action(game, { action: 'add', name });
-            action(game, { action: 'role', playerId: game.players.at(-1).id, role: i < 2 ? 'wolf' : i === 2 ? 'seer' : 'villager' });
-          }
-          action(game, { action: 'lock', open: false });
+          game.title = 'Aldea de práctica';
+          for (const name of ['Luna', 'Bruno', 'Alma', 'Mateo', 'Sofía', 'Leo', 'Emma', 'Nico']) action(game, { action: 'add', name });
         }
         await store.clean(now());
         const code = randomBytes(4).toString('hex').toUpperCase();

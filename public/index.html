@@ -2,19 +2,49 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#101921">
-  <meta name="description" content="Cartas secretas para jugar al hombre lobo en persona. Crea una aldea, reparte los roles y dirige la noche.">
-  <title>Werewolves Online · La noche tiene secretos</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#bfe9ff">
+  <meta name="description" content="Juega al hombre lobo en persona: tu celular es tu carta y el anfitrión dirige la noche. Crea una sala y comparte el QR.">
+  <title>Aldea de Lobos · Tu celular es tu carta</title>
   <link rel="icon" href="/favicon.svg">
+  <link rel="preload" href="/fonts/nunito.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <header class="topbar"><a class="brand" href="/">◈ <span>WEREWOLVES<span class="brand-sub">ONLINE</span></span></a><span class="edition">UN JUEGO PARA REUNIRSE</span><button class="quiet" id="rules-open">Cómo se juega ↗</button></header>
+  <div class="sky" aria-hidden="true"><div class="orb"></div></div>
+  <svg class="scenery" viewBox="0 0 800 170" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+    <path class="hill-back" d="M0 90 Q150 30 320 80 T640 70 T800 85 V170 H0Z"/>
+    <g class="trees"><path d="M40 120l18-46 18 46zM64 124l22-56 22 56zM690 118l16-42 16 42zM712 124l20-52 20 52z"/></g>
+    <path class="hill-front" d="M0 120 Q200 80 400 118 T800 108 V170 H0Z"/>
+    <g class="house"><rect x="170" y="108" width="46" height="36"/><path d="M162 110l31-28 31 28z" class="roof"/><rect x="186" y="122" width="12" height="22" class="door"/><rect x="202" y="116" width="9" height="9" class="win"/></g>
+    <g class="house"><rect x="330" y="116" width="58" height="30"/><path d="M322 118l37-32 37 32z" class="roof"/><rect x="345" y="126" width="12" height="20" class="door"/><rect x="368" y="124" width="10" height="10" class="win"/></g>
+    <g class="house"><rect x="520" y="110" width="40" height="34"/><path d="M512 112l28-26 28 26z" class="roof"/><rect x="530" y="124" width="10" height="20" class="door"/><rect x="546" y="118" width="8" height="8" class="win"/></g>
+  </svg>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="brand-icon" aria-hidden="true">🐺</span><span>Aldea de Lobos</span></a>
+    <span id="net" class="net" hidden>Reconectando…</span>
+    <button class="btn btn-ghost btn-sm" data-act="rules">¿Cómo se juega?</button>
+  </header>
   <main id="app"></main>
-  <div id="message" role="status" aria-live="polite" hidden></div>
-  <dialog id="rules"><button class="quiet close" id="rules-close" aria-label="Cerrar reglas">✕</button><p class="eyebrow">EL PUEBLO CONTRA LA MANADA</p><h2>Una aldea. Tres roles.</h2><p>Todos juegan juntos en persona. El narrador dirige la partida y no participa como jugador. Los celulares reemplazan las cartas.</p><ol><li>El narrador agrega jugadores, asigna roles y comparte cada enlace privado.</li><li>Al iniciar, cada jugador mira su carta y guarda el celular. Todos cierran los ojos.</li><li>La vidente despierta y señala a otra persona. El narrador consulta su rol y se lo muestra discretamente.</li><li>La vidente se duerme. Los lobos despiertan, se reconocen y señalan a una víctima que no sea lobo.</li><li>Amanece. La víctima queda eliminada y se revela su rol. Los vivos discuten y votan en persona.</li><li>El narrador registra al eliminado. Si hay empate, repitan la votación entre los empatados; si persiste, nadie es eliminado.</li></ol><p><strong>La aldea gana</strong> al eliminar a todos los lobos. <strong>Los lobos ganan</strong> al eliminar a todos los demás. Opcionalmente, la sala puede terminar cuando los lobos igualan o superan al resto.</p><p>El manual recomienda 8 a 18 jugadores más el narrador: 2 lobos para 8 a 11 y 3 para 12 a 18, con una vidente. Admitimos 4 a 7 como variante para grupos pequeños.</p><p class="muted">Esta adaptación básica no incluye capitán ni personajes avanzados. La vidente pertenece al equipo de la aldea. Los eliminados guardan silencio.</p><a class="text-link" href="https://cdn.1j1ju.com/medias/60/0e/b4-les-loups-garous-de-thiercelieux-regle.pdf" target="_blank" rel="noreferrer">Leer el manual original ↗</a></dialog>
-  <footer>EN LA MESA, TODOS SON SOSPECHOSOS. <span>Adaptación independiente · Hecho para jugar cara a cara.</span></footer>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="rules" class="sheet" aria-labelledby="rules-title">
+    <button class="btn btn-ghost btn-sm sheet-close" data-act="closeSheet" aria-label="Cerrar">✕</button>
+    <h2 id="rules-title">¿Cómo se juega?</h2>
+    <p>Es el hombre lobo de siempre, pero <strong>cada celular es una carta</strong>. Una persona hace de <strong>narrador</strong> (anfitrión) y dirige la noche; los demás juegan.</p>
+    <ol class="steps">
+      <li><strong>El narrador crea la sala</strong> y comparte el QR. Cada jugador escanea y escribe su nombre.</li>
+      <li><strong>Reparte las cartas.</strong> Cada quien toca la suya, la mira en secreto y bloquea el celular.</li>
+      <li><strong>De noche</strong> todos cierran los ojos. Los celulares se ponen oscuros. El narrador despierta a cada rol y toca lo que decidan.</li>
+      <li><strong>De día</strong> la aldea discute y vota en voz alta. El narrador registra al eliminado.</li>
+    </ol>
+    <h3>Las cartas</h3>
+    <ul class="role-list" id="rules-roles"></ul>
+    <p class="fine"><strong>Gana la aldea</strong> si caen todos los lobos. <strong>Ganan los lobos</strong> si caen todos los demás. Si Cupido enamora a un lobo y a un aldeano y solo quedan ellos dos, ganan los enamorados.</p>
+  </dialog>
+  <dialog id="sheet" class="sheet">
+    <button class="btn btn-ghost btn-sm sheet-close" data-act="closeSheet" aria-label="Cerrar">✕</button>
+    <div id="sheet-body"></div>
+  </dialog>
 </body>
 </html>

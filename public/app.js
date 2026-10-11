@@ -1,253 +1,604 @@
-const app = document.querySelector('#app');
-const ROLE = { wolf: 'Hombre lobo', villager: 'Aldeano', seer: 'Vidente' };
-const PHASE = { lobby: 'Preparación', seer: 'La vidente', wolves: 'Los lobos', dawn: 'Amanecer', day: 'Debate y votación', finished: 'Partida terminada' };
-const DESCRIPTION = { wolf: 'Despierta con la manada y elijan a una víctima. Durante el día, protege tu secreto.', villager: 'Escucha, sospecha y convence a la aldea. Tu objetivo es descubrir a todos los lobos.', seer: 'Cada noche puedes conocer el rol de otra persona. Ayuda a la aldea sin revelar tu secreto.' };
-const wolf = '<svg viewBox="0 0 140 150" aria-hidden="true"><path d="m22 14 35 27h26l35-27-10 81-38 40-38-40Z" fill="#c9b18a"/><path d="m35 29 8 35 15-13m47-22-8 35-15-13" fill="#7e7768"/><path d="m37 78 26 9-17 9m57-18-26 9 17 9M59 110h22l-11 13Z" fill="#17232c"/><path d="m70 62-13 38 13 10 13-10Z" fill="#a99575"/></svg>';
-const art = {
-  wolf,
-  seer: '<svg viewBox="0 0 140 150" aria-hidden="true"><circle cx="70" cy="65" r="42" fill="#263e48" stroke="#c9b18a" stroke-width="2"/><path d="M36 67Q70 26 104 67Q70 100 36 67" fill="none" stroke="#c9b18a" stroke-width="2"/><circle cx="70" cy="65" r="10" fill="#c9b18a"/><path d="m47 104-12 24h70l-12-24M70 4v11M12 54h11M117 54h11m-10-35-8 8M21 19l8 8" stroke="#c9b18a" fill="none" stroke-width="2"/></svg>',
-  villager: '<svg viewBox="0 0 140 150" aria-hidden="true"><circle cx="70" cy="65" r="51" fill="#24383b"/><path d="m22 76 48-42 48 42M34 66v60h72V66" fill="none" stroke="#c9b18a" stroke-width="3"/><path d="M59 126V90h22v36M44 81h9v10h-9m43-10h9v10h-9M48 30v-7m40 7v-7" fill="none" stroke="#c9b18a" stroke-width="2"/><circle cx="109" cy="24" r="9" fill="#c9b18a"/></svg>'
+// Aldea de Lobos — single-file vanilla client. Sections: data, helpers, screens, host, player, events, boot.
+
+/* ───────────── Data ───────────── */
+
+const ROLE = {
+  villager: { name: 'Aldeano', emoji: '🧑‍🌾', team: 'aldea', text: 'Escucha, sospecha y vota. Tu arma es tu voz.', hint: 'Sin poderes. Gana con la aldea.' },
+  wolf: { name: 'Hombre lobo', emoji: '🐺', team: 'lobos', text: 'De noche eliges una víctima con tu manada. De día, disimula.', hint: 'Cada noche devora a alguien. Gana si no queda aldea.' },
+  seer: { name: 'Vidente', emoji: '🔮', team: 'aldea', text: 'Cada noche descubres el rol de una persona. Guíala sin delatarte.', hint: 'Cada noche espía una carta.' },
+  witch: { name: 'Bruja', emoji: '🧪', team: 'aldea', text: 'Tienes una poción de vida y una de muerte. Cada una se usa una sola vez.', hint: 'Una poción para salvar, otra para matar.' },
+  hunter: { name: 'Cazador', emoji: '🏹', team: 'aldea', text: 'Si mueres, te llevas a alguien contigo con tu último disparo.', hint: 'Al morir dispara a quien quiera.' },
+  cupid: { name: 'Cupido', emoji: '💘', team: 'aldea', text: 'La primera noche enamoras a dos personas. Si una muere, la otra también.', hint: 'Enamora a dos jugadores la primera noche.' },
+  girl: { name: 'Niña', emoji: '👧', team: 'aldea', text: 'Puedes espiar a los lobos entre tus dedos… pero si te descubren, mueres.', hint: 'Puede espiar a los lobos (con riesgo).' }
 };
-const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-let session = null, state = null, revealed = false, revealTimer, busy = false, pollBusy = false, noticeTimer;
-const demoMode = /^\/demo\/?$/.test(location.pathname);
-let demoRoom = null, demoPerspective = 'host', demoScenario = 'village';
-function remember(value) { try { localStorage.setItem('werewolves.session', JSON.stringify(value)); } catch {} }
+const SPECIALS = ['seer', 'witch', 'hunter', 'girl', 'cupid'];
+const NIGHT = ['cupid', 'seer', 'wolves', 'witch', 'dawn'];
+const STEP = {
+  cupid: { icon: '💘', title: 'Cupido', script: 'Cupido, abre los ojos y señala a dos personas que se enamorarán. Cupido, duerme. Los enamorados abren los ojos, se miran y vuelven a dormir.', hint: 'Elige a dos jugadores.' },
+  seer: { icon: '🔮', title: 'La vidente', script: 'La vidente abre los ojos y señala a alguien. Le mostrarás su carta en silencio. Vidente, duerme.', hint: 'Elige a quien quiere espiar.' },
+  wolves: { icon: '🐺', title: 'Los lobos', script: 'Los hombres lobo despiertan, se reconocen y señalan en silencio a su víctima. Lobos, duerman.', hint: 'Elige la víctima de esta noche.' },
+  witch: { icon: '🧪', title: 'La bruja', script: 'La bruja abre los ojos. Esta es la víctima de la noche: ¿quieres salvarla? ¿Quieres envenenar a alguien? Bruja, duerme.', hint: 'Muéstrale en silencio la víctima.' },
+  dawn: { icon: '🌅', title: 'Amanecer', script: 'Sale el sol. Todos abren los ojos… menos quien haya muerto durante la noche.', hint: '' },
+  hunter: { icon: '🏹', title: 'Último disparo', script: 'El cazador ha caído, pero aún tiene una bala. ¿A quién dispara?', hint: 'Elige el objetivo.' },
+  day: { icon: '☀️', title: 'Debate y votación', script: 'La aldea discute y señala a un culpable. El más votado es eliminado. Si hay empate, repitan entre los empatados.', hint: 'Elige el resultado de la votación.' }
+};
+const WINNER = {
+  village: { emoji: '🏡', title: '¡Ganó la aldea!', text: 'Todos los lobos fueron descubiertos.' },
+  wolves: { emoji: '🐺', title: '¡Ganaron los lobos!', text: 'La manada devoró a la aldea.' },
+  lovers: { emoji: '💘', title: '¡Ganaron los enamorados!', text: 'El amor venció a los dos bandos.' },
+  nobody: { emoji: '💀', title: 'Nadie sobrevivió', text: 'La aldea quedó vacía.' }
+};
+
+/* ───────────── Helpers ───────────── */
+
+const $ = (selector, root = document) => root.querySelector(selector);
+const app = $('#app');
+const esc = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+let session = null;   // { code, token }
+let state = null;     // last server view
+let ui = fresh();     // client-only state (selection, deck, QR…)
+let animateNext = true, busy = false, pollTimer, revealTimer, toastTimer, wakeLock;
+
+function fresh() { return { sel: [], key: '', heal: false, deck: null, touched: false, qr: null, revealed: false, offline: 0 }; }
+function remember(value) { try { localStorage.setItem('werewolves.session', JSON.stringify(value)); } catch { /* private mode */ } }
 function remembered() { try { return JSON.parse(localStorage.getItem('werewolves.session')); } catch { return null; } }
-function notify(text) { const box = document.querySelector('#message'); box.textContent = text; box.hidden = false; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { box.hidden = true; }, 6000); }
+function forget() { try { localStorage.removeItem('werewolves.session'); } catch { /* ignore */ } }
+function toast(text) {
+  const box = $('#toast'); box.textContent = text; box.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { box.hidden = true; }, 5000);
+}
+function theme(night) { document.body.classList.toggle('night', Boolean(night)); }
+function setMain(html, { bar = '', night = false, bare = false } = {}) {
+  theme(night);
+  app.className = `${bar ? 'has-bar' : ''} ${animateNext ? 'appear' : ''}`.trim();
+  animateNext = false;
+  app.innerHTML = html;
+  $('.bar')?.remove();
+  if (bar) document.body.insertAdjacentHTML('beforeend', `<div class="bar"><div>${bar}</div></div>`);
+  if (!bare) window.scrollTo?.(0, 0);
+}
 async function request(path, options = {}) {
-  const response = await fetch(path, { signal: AbortSignal.timeout(15000), ...options, headers: { 'Content-Type': 'application/json', ...(session ? { Authorization: `Bearer ${session.token}` } : {}), ...options.headers } });
+  const response = await fetch(path, {
+    signal: AbortSignal.timeout(15000), ...options,
+    headers: { 'Content-Type': 'application/json', ...(session ? { Authorization: `Bearer ${session.token}` } : {}), ...options.headers }
+  });
   let data;
-  try { data = await response.json(); } catch { throw new Error('El servidor no respondió correctamente. Intenta de nuevo.'); }
-  if (!response.ok) throw new Error(data.error || 'No se pudo completar la solicitud.'); return data;
+  try { data = await response.json(); } catch { throw new Error('El servidor no respondió bien. Intenta de nuevo.'); }
+  if (!response.ok) { const error = new Error(data.error || 'No se pudo completar la solicitud.'); error.status = response.status; throw error; }
+  return data;
 }
-function privateLink(token) { return `${location.origin}/#${state.code}/${token}`; }
-async function copy(text) {
-  try { await navigator.clipboard.writeText(text); notify('Enlace copiado. Compártelo solo con la persona indicada.'); }
-  catch { const dialog = document.createElement('dialog'); const p = document.createElement('p'); p.textContent = 'Copia este enlace privado:'; const input = document.createElement('input'); input.value = text; input.readOnly = true; const close = document.createElement('button'); close.className = 'secondary'; close.textContent = 'Cerrar'; close.onclick = () => { dialog.close(); dialog.remove(); }; dialog.append(p, input, close); document.body.append(dialog); dialog.showModal(); input.select(); }
+const link = token => `${location.origin}/#${session.code}/${token}`;
+const inviteLink = () => `${location.origin}/#join/${session.code}`;
+const player = id => state.players.find(p => p.id === id);
+const alive = () => state.players.filter(p => p.alive);
+const colorOf = id => `c${Math.max(0, state.players.findIndex(p => p.id === id)) % 8}`;
+const avatar = (p, badge = '') => `<span class="avatar ${colorOf(p.id)}" aria-hidden="true">${esc(p.name.trim().charAt(0).toUpperCase())}${badge ? `<span class="badge">${badge}</span>` : ''}</span>`;
+async function copy(text, message = 'Enlace copiado.') {
+  try { await navigator.clipboard.writeText(text); toast(message); }
+  catch { openSheet(`<h2>Copia el enlace</h2><p class="link-box">${esc(text)}</p>`); }
 }
+
+/* ───────────── Sheets (dialogs) ───────────── */
+
+function openSheet(html) {
+  $('#sheet-body').innerHTML = html;
+  const dialog = $('#sheet');
+  if (!dialog.open) dialog.showModal();
+}
+function closeSheets() {
+  for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  ui.revealed = false; clearTimeout(revealTimer);
+}
+function fillRules() {
+  $('#rules-roles').innerHTML = Object.values(ROLE).map(r => `<li><span class="emoji">${r.emoji}</span><span><strong>${r.name}</strong><small>${r.text}</small></span></li>`).join('');
+}
+
+/* ───────────── Public screens ───────────── */
+
 function home() {
-  state = null; session = null; const saved = remembered();
-  app.innerHTML = `<section class="hero"><div><p class="eyebrow">LA NOCHE TIENE SECRETOS</p><h1>Entre nosotros<br>hay <em>lobos.</em></h1><p class="intro">Una aldea, una noche y nadie en quien confiar. Reúne a tus amigos: nosotros ponemos las cartas; ustedes, las sospechas.</p><div class="actions"><button class="primary" id="create-open">Crear una aldea <span>↗</span></button><button class="secondary" id="join-open">Tengo un enlace</button></div>${saved ? '<button class="quiet" id="resume">↶ Volver a mi última sala</button>' : ''}<p class="fine">4–18 jugadores · Un narrador · En persona</p></div><div class="scene" aria-label="Una carta de hombre lobo bajo la luna"><div class="moon"></div><div class="forest"></div><div class="hero-card"><small>EL SECRETO ES TUYO</small>${wolf}<span>Hombre lobo</span></div><div class="scene-caption">NO TODOS SOBREVIVEN AL AMANECER</div></div></section><section class="features"><article><span>01 / REÚNE A LA ALDEA</span><h3>Todos en la misma mesa.</h3><p>Jueguen cara a cara. La conversación sigue siendo el corazón de la partida.</p></article><article><span>02 / GUARDA TU SECRETO</span><h3>Una carta, un celular.</h3><p>Cada jugador recibe un enlace privado. Mira tu rol y vuelve a guardar el teléfono.</p></article><article><span>03 / DIRIGE LA NOCHE</span><h3>Tú llevas la historia.</h3><p>El narrador controla los roles, las noches y el destino de la aldea.</p></article></section>`;
-  document.querySelector('#create-open').onclick = createForm;
-  document.querySelector('#join-open').onclick = joinForm;
-  document.querySelector('#join-open').textContent = 'Entrar con código';
-  const demoLink = document.createElement('a'); demoLink.href = '/demo'; demoLink.className = 'quiet'; demoLink.textContent = 'Probar la demo ↗'; document.querySelector('#join-open').after(demoLink);
-  if (saved) document.querySelector('#resume').onclick = () => { location.hash = `${saved.code}/${saved.token}`; };
+  stopPolling(); session = null; state = null; ui = fresh();
+  const saved = remembered();
+  setMain(`
+    <section class="hero on-sky">
+      <div class="hero-art" aria-hidden="true"><span>🐺</span><i>🌲</i><i>🏠</i></div>
+      <h1>Aldea<br>de <em>Lobos</em></h1>
+      <p class="tagline">Tu celular es tu carta. Reúne a tus amigos, escaneen el QR y que caiga la noche.</p>
+      <div class="actions">
+        ${saved ? '<button class="btn btn-grape btn-big" data-act="resume">↩ Volver a mi aldea</button>' : ''}
+        <button class="btn btn-big" data-act="createForm">🏡 Crear una aldea</button>
+        <button class="btn btn-green btn-big" data-act="joinForm">🎟️ Tengo un código</button>
+        <a class="btn btn-white" href="/demo">🧪 Probar con jugadores de práctica</a>
+      </div>
+    </section>`);
 }
 function createForm() {
-  app.innerHTML = `<section class="narrow"><p class="eyebrow">ANTES DE QUE CAIGA LA NOCHE</p><h2>Crea tu aldea.</h2><p class="muted">Serás el narrador. Agrega a tus amigos y comparte sus cartas desde tu panel.</p><form class="panel" id="create"><label class="field" for="title">Nombre de la aldea</label><input id="title" name="title" placeholder="La aldea de los sospechosos" maxlength="40" required autofocus><label class="field" for="victory">Los lobos ganan cuando…</label><select name="victory" id="victory"><option value="elimination">Eliminan a todos los demás (manual)</option><option value="parity">Igualan o superan a los aldeanos (variante)</option></select><p class="form-note">La vidente juega para la aldea. Empezamos solo con hombre lobo, aldeano y vidente.</p><div class="actions"><button class="primary" type="submit">Crear sala ↗</button><button class="secondary" type="button" id="back">Volver</button></div></form></section>`;
-  document.querySelector('#back').onclick = home;
-  document.querySelector('#create').onsubmit = async e => {
-    e.preventDefault(); const button = e.target.querySelector('button'); button.disabled = true;
-    try { const data = await request('/api/games', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(e.target))) }); remember({ code: data.code, token: data.token }); location.hash = `${data.code}/${data.token}`; }
-    catch (error) { notify(error.message); button.disabled = false; }
-  };
+  setMain(`
+    <form class="card" id="create">
+      <h2>Crea tu aldea 🏡</h2>
+      <p class="muted">Tú serás el narrador: diriges la noche y no juegas. Podrás invitar con un QR.</p>
+      <label class="field">Nombre de la aldea
+        <input name="title" placeholder="La aldea de los sospechosos" maxlength="40" required autocomplete="off">
+      </label>
+      <button class="btn btn-big" type="submit">Crear sala</button>
+      <button class="btn btn-ghost" type="button" data-act="home">Volver</button>
+    </form>`);
 }
-function joinForm(code = '') {
-  session = null; state = null;
-  app.innerHTML = `<section class="narrow"><p class="eyebrow">HAY UN SITIO PARA TI</p><h2>Entra a la aldea.</h2><p class="muted">Escribe el código o escanea el QR del narrador. Tu carta seguirá siendo solo tuya.</p><form class="panel" id="join"><label class="field" for="code">Código de sala o enlace privado</label><input id="code" name="code" value="${escape(typeof code === 'string' ? code : '')}" placeholder="Ej. A1B2C3D4" required autocomplete="off" autocapitalize="characters" spellcheck="false"><label class="field" for="player-name">Tu nombre</label><input id="player-name" name="playerName" maxlength="40" placeholder="Como te conocen en la mesa" autocomplete="nickname"><p class="form-note">El narrador debe aprobar tu ingreso antes de comenzar. Si recibiste un enlace privado, no necesitas ingresar un nombre.</p><div class="actions"><button class="primary">Entrar ↗</button><button class="secondary" type="button" id="back">Volver</button></div></form></section>`;
-  document.querySelector('#back').onclick = home;
-  let pendingToken;
-  document.querySelector('#join').onsubmit = async e => {
-    e.preventDefault();
-    const input = e.target.elements.namedItem('code').value.trim();
-    const privateMatch = input.match(/#([A-F0-9]{8})\/([A-Za-z0-9_-]{43})$/);
-    if (privateMatch) { location.hash = `${privateMatch[1]}/${privateMatch[2]}`; return; }
-    const roomCode = input.match(/#join\/([A-F0-9]{8})$/i)?.[1]?.toUpperCase() || input.toUpperCase().replace(/[\s-]/g, '');
-    if (!/^[A-F0-9]{8}$/.test(roomCode)) return notify('El código tiene 8 letras y números. Revisa lo que te dio el narrador.');
-    const saved = remembered(); if (saved?.code === roomCode) { location.hash = `${saved.code}/${saved.token}`; return; }
-    const name = e.target.elements.namedItem('playerName').value.trim(); if (!name) return notify('Escribe tu nombre para solicitar el ingreso.');
-    const button = e.target.querySelector('button'); button.disabled = true;
-    if (!pendingToken) { const bytes = crypto.getRandomValues(new Uint8Array(32)); pendingToken = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
-    try {
-      const data = await request(`/api/games/${roomCode}/join`, { method: 'POST', body: JSON.stringify({ name, token: pendingToken }) });
-      remember({ code: data.code, token: data.token }); location.hash = `${data.code}/${data.token}`;
-    } catch (error) { notify(error.message); button.disabled = false; }
-  };
+function joinForm(code = '', locked = false) {
+  setMain(`
+    <form class="card" id="join">
+      <h2>Entra a la aldea 🎟️</h2>
+      <p class="muted">Escanea el QR del narrador o escribe el código de 8 letras.</p>
+      <label class="field">Código de sala
+        <input name="code" value="${esc(code)}" placeholder="A1B2C3D4" maxlength="80" autocomplete="off" required ${locked ? 'readonly' : ''}>
+      </label>
+      <label class="field">Tu nombre
+        <input name="playerName" placeholder="Como te dicen tus amigos" maxlength="40" autocomplete="off" required>
+      </label>
+      <button class="btn btn-green btn-big" type="submit">¡Entrar!</button>
+      <button class="btn btn-ghost" type="button" data-act="home">Volver</button>
+    </form>`);
+  $(locked ? 'input[name=playerName]' : 'input[name=code]')?.focus?.();
 }
-async function enter() {
-  clearTimeout(revealTimer); revealed = false;
-  if (demoMode) { await startDemo(); return; }
-  const invitation = location.hash.match(/^#join\/([A-F0-9]{8})$/i);
-  if (invitation) { joinForm(invitation[1].toUpperCase()); return; }
-  const match = location.hash.match(/^#([A-F0-9]{8})\/([A-Za-z0-9_-]{43})$/);
-  if (!match) { home(); if (location.hash) notify('El enlace no es válido. Pide tu carta al narrador.'); return; }
-  session = { code: match[1], token: match[2] }; state = null;
-  app.innerHTML = '<section class="narrow"><p class="eyebrow">ENTRANDO A LA ALDEA</p><h2>Buscando tu carta…</h2></section>';
-  try { state = await request(`/api/games/${session.code}`); remember(session); render(); }
-  catch (error) { app.innerHTML = `<section class="narrow panel"><h2>No pudimos entrar.</h2><p>${escape(error.message)}</p><a class="secondary" href="/">Volver al inicio</a></section>`; }
+function failure(error) {
+  setMain(`<section class="card alert center"><h2>No pudimos entrar 😿</h2><p>${esc(error.message)}</p><a class="btn" href="/">Volver al inicio</a></section>`);
 }
-async function send(action, extra = {}) {
-  if (busy || !state) return; busy = true;
-  app.querySelectorAll('button,select,input').forEach(b => { b.disabled = true; });
-  try { state = await request(`/api/games/${session.code}/actions`, { method: 'POST', body: JSON.stringify({ action, revision: state.revision, ...extra }) }); render(); }
-  catch (error) { notify(error.message); try { state = await request(`/api/games/${session.code}`); render(); } catch {} }
-  finally { busy = false; app.querySelectorAll('button,select,input').forEach(b => { b.disabled = b.dataset.locked === 'true'; }); }
+
+/* ───────────── Rendering dispatcher ───────────── */
+
+function render() {
+  if (!state) return;
+  const key = `${state.phase}:${state.round}`;
+  if (key !== ui.key) { animateNext = true; ui.key = key; ui.sel = []; ui.heal = false; ui.revealed = false; clearTimeout(revealTimer); }
+  const view = session && state.host ? renderHost : renderPlayer;
+  view();
+  if (state.host && !wakeLock) keepAwake();
 }
-function targets(filter = () => true) { return state.players.filter(p => p.alive && filter(p)).map(p => `<option value="${p.id}">${escape(p.name)}</option>`).join(''); }
-function phasePanel() {
-  const phase = state.phase;
-  if (phase === 'lobby') {
-    const n = state.players.length, wolves = state.players.filter(p => p.role === 'wolf').length, seers = state.players.filter(p => p.role === 'seer').length;
-    const ready = n >= 4 && wolves >= 1 && wolves < n / 2 && seers === 1 && state.players.every(p => p.approved);
-    return `<h3>Prepara las cartas.</h3><p class="muted">Asigna los roles en la lista o deja que el azar decida. Comparte cada carta antes de empezar.</p><label class="field" for="wolves-count">Lobos para el reparto aleatorio</label><select id="wolves-count">${Array.from({ length: Math.max(1, Math.ceil(n / 2) - 1) }, (_, i) => `<option value="${i + 1}" ${i + 1 === (n >= 12 ? 3 : n >= 8 ? 2 : 1) ? 'selected' : ''}>${i + 1} ${i ? 'lobos' : 'lobo'}</option>`).join('')}</select><button class="secondary full" id="shuffle" ${n < 4 ? 'disabled data-locked="true"' : ''}>↻ Repartir al azar</button><p class="form-note">${n < 8 ? 'Con menos de 8 jugadores se usa una variante para grupos pequeños.' : 'Sugerencia: 2 lobos hasta 11 jugadores; 3 lobos desde 12.'}</p><button class="primary full" id="start" ${!ready ? 'disabled data-locked="true"' : ''}>Que caiga la noche ↗</button>${!ready ? '<p class="fine warning">Necesitas 4–18 jugadores, una vidente y al menos un lobo, con mayoría de la aldea.</p>' : '<p class="fine">Los jugadores podrán revelar su carta cuando empieces.</p>'}`;
-  }
-  const lastInspection = state.inspections.at(-1);
-  const inspection = lastInspection?.round === state.round ? `<div class="callout">Solo para ti y la vidente:<br><strong>${escape(lastInspection.name)} es ${ROLE[lastInspection.role]}.</strong><br>Comunícalo discretamente antes de despertar a los lobos.</div>` : '';
-  const forms = {
-    seer: `<p class="phase-text">“La vidente despierta y señala a alguien.”</p><p class="muted">Muestra el resultado solo a la vidente y pídele que vuelva a cerrar los ojos.</p><form id="phase-form"><label class="field" for="target">¿A quién quiere consultar?</label><select name="playerId" id="target">${targets(p => p.role !== 'seer')}</select><div class="actions"><button class="primary full">Consultar rol ↗</button></div></form>`,
-    wolves: `${inspection}<p class="phase-text">“Los hombres lobo despiertan y eligen a su víctima.”</p><p class="muted">La manada se pone de acuerdo en silencio. Registra a quién señalaron.</p><form id="phase-form"><label class="field" for="target">Víctima de esta noche</label><select name="playerId" id="target">${targets(p => p.role !== 'wolf')}</select><div class="actions"><button class="primary full">Confirmar víctima ↗</button></div></form>`,
-    dawn: `<p class="phase-text">“Los lobos se duermen. La aldea despierta.”</p><div class="callout">Al amanecer anunciarás la muerte de <strong>${escape(state.players.find(p => p.id === state.pendingVictim)?.name)}</strong>.</div><p class="muted">La muerte y su rol se harán visibles al anunciar el amanecer.</p><button class="primary full" id="dawn">Anunciar amanecer ↗</button>`,
-    day: `<p class="phase-text">“La aldea busca al culpable.”</p><p class="muted">Discutan y voten en persona. Registra al jugador con más votos. Si hay empate, repitan entre los empatados.</p><form id="phase-form"><label class="field" for="target">Resultado de la votación</label><select name="playerId" id="target"><option value="">Selecciona el resultado</option>${targets()}<option value="none">Empate persistente: nadie eliminado</option></select><div class="actions"><button class="primary full">Cerrar votación ↗</button></div></form>`,
-    finished: `<p class="eyebrow">LA HISTORIA TERMINÓ</p><h2>${state.winner === 'village' ? 'La aldea sobrevivió.' : 'La manada venció.'}</h2><p class="muted">Todos los roles están revelados. ¿Una revancha con nuevos secretos?</p><button class="primary full" id="new-game">Crear otra aldea ↗</button>`
-  };
-  return forms[phase];
+
+/* ───────────── Narrator (host) ───────────── */
+
+function selectable(phase) {
+  const open = alive();
+  if (phase === 'seer') return open.filter(p => p.role !== 'seer');
+  if (phase === 'wolves') return open.filter(p => p.role !== 'wolf');
+  return open;
 }
-function renderHostBase() {
-  const wolves = state.players.filter(p => p.alive && p.role === 'wolf').length;
-  const living = state.players.filter(p => p.alive).length;
-  app.innerHTML = `<div class="page-head"><div><p class="eyebrow">PANEL DEL NARRADOR · ${state.code}</p><h1>${escape(state.title)}</h1><span class="status">${PHASE[state.phase]}${state.round ? ` · Ronda ${state.round}` : ''}</span></div><button class="secondary small" id="host-link">Guardar mi enlace ↗</button></div><div class="columns"><section><div class="panel"><div class="section-head"><h3>La aldea <span class="muted">/ ${state.players.length}</span></h3><span class="pill">Modo básico</span></div>${state.phase === 'lobby' ? '<form class="add-form" id="add-player"><input name="name" aria-label="Nombre del jugador" placeholder="Nombre del jugador" maxlength="40" required autocomplete="off"><button class="secondary small">+ Agregar</button></form>' : ''}${state.players.map(p => `<div class="player-row ${!p.alive ? 'dead' : ''}"><span class="avatar">${escape(p.name[0].toUpperCase())}</span><div class="player-name">${escape(p.name)}<div class="status">${p.alive ? 'En la aldea' : 'Eliminado'}</div></div>${state.phase === 'lobby' ? `<select data-role="${p.id}" aria-label="Rol de ${escape(p.name)}">${Object.entries(ROLE).map(([key, value]) => `<option value="${key}" ${p.role === key ? 'selected' : ''}>${value}</option>`).join('')}</select>` : `<span class="role-tag">${ROLE[p.role]}</span>`}<div class="row-actions"><button class="quiet" data-share="${p.id}" aria-label="Copiar carta de ${escape(p.name)}">Carta ↗</button>${state.phase === 'lobby' ? `<button class="quiet" data-remove="${p.id}" aria-label="Quitar a ${escape(p.name)}">✕</button>` : ''}</div></div>`).join('') || '<div class="empty">Todavía no hay sospechosos.<br>Agrega a la primera persona.</div>'}<p class="fine">Cada enlace da acceso a una sola carta. Mantén tu pantalla y tu enlace de narrador en privado.</p></div><div class="panel"><h3>La historia de la aldea.</h3><ul class="timeline">${[...state.events].reverse().map(e => `<li><small>RONDA ${e.round || 1}</small>${escape(e.text)}</li>`).join('') || '<li class="muted">La historia empieza al caer la noche.</li>'}</ul></div></section><aside><div class="panel"><div class="stats"><div><strong>${living}</strong><span>vivos</span></div><div><strong>${wolves}</strong><span>lobos</span></div><div><strong>${living - wolves}</strong><span>aldea</span></div></div>${phasePanel()}</div><p class="fine">Victoria de los lobos: ${state.victory === 'parity' ? 'igualdad o mayoría numérica (variante)' : 'eliminar a toda la aldea (manual)'}. Las salas expiran tras 7 días sin cambios.</p></aside></div>`;
-  document.querySelector('#host-link').onclick = () => copy(privateLink(session.token));
-  document.querySelectorAll('[data-share]').forEach(b => { b.onclick = () => copy(privateLink(state.players.find(p => p.id === b.dataset.share).token)); });
-  document.querySelectorAll('[data-remove]').forEach(b => { b.onclick = () => send('remove', { playerId: b.dataset.remove }); });
-  document.querySelectorAll('[data-role]').forEach(s => { s.onchange = () => send('role', { playerId: s.dataset.role, role: s.value }); });
-  const add = document.querySelector('#add-player'); if (add) add.onsubmit = e => { e.preventDefault(); send('add', { name: add.elements.namedItem('name').value }); };
-  const shuffle = document.querySelector('#shuffle'); if (shuffle) shuffle.onclick = () => send('shuffle', { wolves: Number(document.querySelector('#wolves-count').value) });
-  const start = document.querySelector('#start'); if (start) start.onclick = () => send('start');
-  const dawn = document.querySelector('#dawn'); if (dawn) dawn.onclick = () => send('dawn');
-  const form = document.querySelector('#phase-form');
-  if (form) form.onsubmit = e => { e.preventDefault(); const target = form.elements.namedItem('playerId').value; if (!target) return notify('Selecciona un jugador o un empate persistente.'); const action = { seer: 'inspect', wolves: 'hunt', day: 'vote' }[state.phase]; if (action === 'vote' && !confirm(target === 'none' ? '¿Cerrar la votación sin eliminar a nadie?' : `¿Eliminar a ${state.players.find(p => p.id === target).name}?`)) return; send(action, { playerId: target === 'none' ? null : target }); };
-  const again = document.querySelector('#new-game'); if (again) again.onclick = () => { history.replaceState(null, '', '/'); session = null; state = null; createForm(); };
+function tiles(list, { none = '' } = {}) {
+  return `<div class="grid">${list.map(p => `
+    <button class="tile ${ui.sel.includes(p.id) ? 'sel' : ''}" data-act="pick" data-id="${p.id}" aria-pressed="${ui.sel.includes(p.id)}">
+      ${avatar(p, ROLE[p.role]?.emoji)}<span>${esc(p.name)}</span>
+    </button>`).join('')}
+    ${none ? `<button class="tile ${ui.sel.includes('none') ? 'sel' : ''}" data-act="pick" data-id="none" aria-pressed="${ui.sel.includes('none')}"><span class="avatar c7" aria-hidden="true">∅</span><span>${none}</span></button>` : ''}
+  </div>`;
 }
-async function showQr(playerId) {
-  try {
-    const data = await request(`/api/games/${session.code}/qr`, { method: 'POST', body: JSON.stringify(playerId ? { playerId } : {}) });
-    const modal = document.createElement('dialog'); modal.className = 'qr-dialog';
-    const title = document.createElement('h2'); title.textContent = playerId ? 'Tu carta privada.' : 'Entra a la aldea.';
-    const caption = document.createElement('p'); caption.className = 'muted'; caption.textContent = playerId ? 'Muestra este QR únicamente a la persona indicada.' : 'Escanea el QR, escribe tu nombre y espera la aprobación del narrador.';
-    const image = document.createElement('img'); image.src = data.image; image.alt = playerId ? 'QR privado de jugador' : `QR para entrar a la sala ${state.code}`; image.width = 280; image.height = 280;
-    const code = document.createElement('p'); code.className = 'room-code'; code.textContent = state.code;
-    const copyButton = document.createElement('button'); copyButton.className = 'primary'; copyButton.textContent = 'Copiar enlace'; copyButton.onclick = () => copy(data.link);
-    const closeButton = document.createElement('button'); closeButton.className = 'secondary'; closeButton.textContent = 'Cerrar'; closeButton.onclick = () => modal.close();
-    const buttons = document.createElement('div'); buttons.className = 'actions'; buttons.append(copyButton,closeButton);
-    modal.append(title,caption,image,code,buttons); modal.addEventListener('close', () => modal.remove()); document.body.append(modal); modal.showModal();
-  } catch (error) { notify(error.message); }
+const bubble = (key, extra = '') => `<div class="bubble"><span class="speaker" aria-hidden="true">🎙️</span><q>${STEP[key].script}</q>${STEP[key].hint ? `<p class="hint">${STEP[key].hint}${extra}</p>` : ''}</div>`;
+const stepHead = (key, label) => `<div class="step-title"><span class="step-icon" aria-hidden="true">${STEP[key].icon}</span><div><small>${label}</small><h2>${STEP[key].title}</h2></div></div>`;
+const barButton = (act, label, { cls = '', disabled = false, extra = '' } = {}) => `<button class="btn btn-big btn-block ${cls}" data-act="${act}" ${disabled ? 'disabled' : ''} ${extra}>${label}</button>`;
+const names = ids => ids.map(id => esc(player(id)?.name ?? '?')).join(' y ');
+
+function chronicle() {
+  const items = [...state.events].reverse().map(e => `<li><small>${e.round ? `Noche ${e.round}` : 'Inicio'}</small><span>${esc(e.text)}</span></li>`).join('');
+  return `<details class="card"><summary>📜 Crónica de la aldea</summary><ul class="log">${items || '<li class="muted">Todavía no pasó nada.</li>'}</ul></details>`;
 }
+function rosterCard() {
+  return `<details class="card"><summary>👥 Aldeanos (${alive().length} vivos de ${state.players.length})</summary>
+    <div class="grid">${state.players.map(p => `<div class="tile static ${p.alive ? '' : 'dead'}">${avatar(p, ROLE[p.role]?.emoji)}<span>${esc(p.name)}<br><small class="muted">${ROLE[p.role]?.name ?? ''}${p.alive ? '' : ' · eliminado'}</small></span></div>`).join('')}</div></details>`;
+}
+function hostFooter() {
+  return `${state.phase !== 'lobby' ? rosterCard() : ''}${state.phase !== 'lobby' ? chronicle() : ''}
+    <section class="card"><h3>🔑 Tu enlace de narrador</h3><p class="fine">Es tu llave. Si cierras el navegador sin guardarlo, no podrás volver a dirigir esta partida.</p>
+    <div class="row"><button class="btn btn-sm" data-act="copyHost">Copiar mi enlace</button><button class="btn btn-sm btn-white" data-act="leave">Salir de la sala</button></div></section>`;
+}
+function topHead(label) {
+  return `<div class="row between on-sky"><div><h1>${esc(state.title)}</h1><p class="muted">${label}</p></div>
+    <div class="row"><span class="pill sun">Sala ${state.code}</span>${state.canUndo && state.phase !== 'lobby' ? '<button class="btn btn-sm btn-white" data-act="undo">↩ Deshacer</button>' : ''}</div></div>`;
+}
+
 function renderHost() {
-  renderHostBase();
-  if (state.phase === 'lobby') {
-    const panel = document.createElement('section'); panel.className = 'invite-panel';
-    panel.innerHTML = `<div><p class="eyebrow">EL CÓDIGO DE TU ALDEA</p><button class="room-code quiet" id="copy-code" aria-label="Copiar código de sala">${state.code}</button><p class="muted">Compártelo con el grupo. Tú apruebas a quienes ingresen.</p></div><div class="actions"><button class="primary" id="room-qr">Mostrar QR</button><button class="secondary" id="room-link">Invitar ↗</button><button class="secondary" id="lock-room">${state.joinOpen ? 'Cerrar ingreso' : 'Abrir ingreso'}</button></div>`;
-    app.querySelector('.page-head').after(panel);
-    document.querySelector('#copy-code').onclick = () => copy(state.code);
-    document.querySelector('#room-qr').onclick = () => showQr();
-    document.querySelector('#room-link').onclick = () => copy(`${location.origin}/#join/${state.code}`);
-    document.querySelector('#lock-room').onclick = () => send('lock', { open: !state.joinOpen });
-    for (const p of state.players.filter(p => !p.approved)) {
-      const row = document.querySelector(`[data-remove="${p.id}"]`).closest('.player-row');
-      row.classList.add('pending'); row.querySelector('.status').textContent = 'Pendiente de aprobación';
-      const approve = document.createElement('button'); approve.className = 'primary small'; approve.textContent = 'Aprobar'; approve.onclick = () => send('approve', { playerId: p.id }); row.querySelector('.row-actions').prepend(approve);
-    }
+  const { phase } = state;
+  const night = NIGHT.includes(phase);
+  const draw = { lobby: hostLobby, reveal: hostReveal, day: hostPick, hunter: hostPick, cupid: hostPick, seer: hostSeer, wolves: hostWolves, witch: hostWitch, dawn: hostDawn, finished: hostFinished }[phase];
+  const { body, bar = '' } = draw();
+  const label = phase === 'lobby' ? 'Preparando la aldea' : phase === 'finished' ? 'Partida terminada' : phase === 'reveal' ? '🃏 Reparto de cartas' : `${night ? '🌙 Noche' : '☀️ Día'} ${state.round}`;
+  setMain(`<div class="stack">${topHead(label)}${body}${hostFooter()}</div>`, { bar, night, bare: true });
+  if (phase === 'lobby') loadQr();
+}
+
+/* — Lobby — */
+
+function suggest(n) {
+  return { wolf: Math.max(1, Math.round(n / 4)), seer: Number(n >= 5), witch: Number(n >= 6), hunter: Number(n >= 7), girl: Number(n >= 8), cupid: Number(n >= 9) };
+}
+function deckProblem(n, deck, pending) {
+  if (pending) return `Aprueba o quita a ${pending} jugador${pending > 1 ? 'es' : ''} pendiente${pending > 1 ? 's' : ''}.`;
+  if (n < 4) return `Faltan ${4 - n} jugador${4 - n > 1 ? 'es' : ''} (mínimo 4).`;
+  const special = SPECIALS.reduce((sum, r) => sum + deck[r], 0) + deck.wolf;
+  if (special > n) return 'Hay más cartas especiales que jugadores.';
+  if (deck.wolf >= n - deck.wolf) return 'Demasiados lobos: deben ser menos que el resto.';
+  return '';
+}
+function hostLobby() {
+  const n = state.players.length, pending = state.players.filter(p => !p.approved).length;
+  if (!ui.touched || !ui.deck) ui.deck = suggest(n);
+  const deck = ui.deck, villagers = n - deck.wolf - SPECIALS.reduce((s, r) => s + deck[r], 0);
+  const problem = deckProblem(n, deck, pending);
+  const rows = state.players.map(p => `
+    <div class="player-row">${avatar(p)}
+      <div class="who"><strong>${esc(p.name)}</strong><small class="muted">${p.approved ? 'Listo para jugar' : '⏳ Pide entrar'}</small></div>
+      <div class="actions">
+        ${p.approved ? `<button class="btn btn-sm btn-white" data-act="playerQr" data-id="${p.id}" aria-label="Carta de ${esc(p.name)}">📱 Carta</button>` : `<button class="btn btn-sm btn-green" data-act="approve" data-id="${p.id}">✓ Aceptar</button>`}
+        <button class="btn btn-sm btn-white" data-act="remove" data-id="${p.id}" aria-label="Quitar a ${esc(p.name)}">✕</button>
+      </div>
+    </div>`).join('');
+  const deckRows = `
+    <div class="deck-row on"><span class="emoji">🐺</span><div class="info"><strong>Hombres lobo</strong><small>Cazan de noche</small></div>
+      <div class="stepper"><button class="btn" data-act="wolves" data-delta="-1" aria-label="Menos lobos">−</button><b>${deck.wolf}</b><button class="btn" data-act="wolves" data-delta="1" aria-label="Más lobos">+</button></div></div>
+    ${SPECIALS.map(r => `<div class="deck-row ${deck[r] ? 'on' : ''}"><span class="emoji">${ROLE[r].emoji}</span><div class="info"><strong>${ROLE[r].name}</strong><small>${ROLE[r].hint}</small></div>
+      <button class="btn switch" data-act="toggleRole" data-role="${r}" aria-pressed="${Boolean(deck[r])}">${deck[r] ? 'Sí' : 'No'}</button></div>`).join('')}`;
+  const body = `
+    <div class="two">
+      <section class="card sun">
+        <div class="card-head"><h3>📲 Invita a la aldea</h3><button class="btn btn-sm ${state.joinOpen ? 'btn-green' : 'btn-red'}" data-act="lock" aria-pressed="${state.joinOpen}">${state.joinOpen ? 'Abierta' : 'Cerrada'}</button></div>
+        <div class="qr" id="qr-box">${ui.qr ? `<img src="${ui.qr}" alt="Código QR para unirse a la sala ${state.code}">` : '<span class="muted">Generando QR…</span>'}</div>
+        <div class="code" aria-label="Código de sala">${state.code}</div>
+        <div class="row"><button class="btn btn-sm" data-act="copyInvite">Copiar enlace</button><button class="btn btn-sm btn-white" data-act="share">Compartir</button></div>
+        <p class="fine">Quien escanee escribe su nombre y tú lo aceptas. El QR solo permite pedir entrada.</p>
+      </section>
+      <section class="card">
+        <div class="card-head"><h3>👥 Jugadores (${n}/18)</h3><span class="pill ${n >= 4 ? 'green' : ''}">mín. 4</span></div>
+        ${rows || '<p class="empty">Aún no hay nadie. ¡Muestra el QR!</p>'}
+        <form id="add" class="row"><input name="name" placeholder="Agregar sin celular…" maxlength="40" autocomplete="off" aria-label="Nombre del jugador"><button class="btn btn-sm btn-green" type="submit">Agregar</button></form>
+      </section>
+    </div>
+    <section class="card">
+      <h3>🃏 Reparto de cartas</h3>
+      <p class="muted">Se reparten al azar. Los aldeanos completan el resto.</p>
+      <div class="deck">${deckRows}</div>
+      <div class="summary"><span class="pill grape">${n} jugadores</span><span class="pill red">🐺 ${deck.wolf}</span>${SPECIALS.filter(r => deck[r]).map(r => `<span class="pill sun">${ROLE[r].emoji} 1</span>`).join('')}<span class="pill green">🧑‍🌾 ${Math.max(0, villagers)}</span></div>
+    </section>`;
+  const bar = `${problem ? `<p class="hint">${esc(problem)}</p>` : ''}${barButton('start', 'Repartir cartas 🃏', { cls: 'btn-green', disabled: Boolean(problem) })}`;
+  return { body, bar };
+}
+async function loadQr() {
+  if (ui.qr || ui.qrLoading) return;
+  ui.qrLoading = true;
+  try { const data = await request(`/api/games/${session.code}/qr`, { method: 'POST', body: '{}' }); ui.qr = data.image; const box = $('#qr-box'); if (box) box.innerHTML = `<img src="${esc(ui.qr)}" alt="Código QR para unirse a la sala ${state.code}">`; }
+  catch (error) { const box = $('#qr-box'); if (box) box.innerHTML = `<span class="muted">No se pudo generar el QR. Comparte el código.</span>`; }
+  finally { ui.qrLoading = false; }
+}
+
+/* — Reveal — */
+
+function hostReveal() {
+  const rows = state.players.map(p => `<div class="player-row">${avatar(p)}<div class="who"><strong>${esc(p.name)}</strong></div><button class="btn btn-sm btn-white" data-act="showCard" data-id="${p.id}">Ver su carta aquí</button></div>`).join('');
+  const body = `
+    <section class="card sun center"><h2>🃏 ¡Cartas repartidas!</h2>
+      <p>Cada jugador toca su carta en su celular, la mira en secreto y bloquea la pantalla. Cuando todos estén listos, empieza la noche.</p></section>
+    <section class="card"><h3>¿Alguien sin celular?</h3><p class="muted">Préstale este: tú ves su carta y se la pasas para que la mire solo.</p>${rows}</section>`;
+  return { body, bar: barButton('sleep', 'Todos listos: ¡a dormir! 🌙', { cls: 'btn-grape' }) };
+}
+
+/* — Night / day picks — */
+
+function confirmLabel() {
+  const first = ui.sel[0];
+  const who = first && first !== 'none' ? esc(player(first)?.name ?? '') : '';
+  switch (state.phase) {
+    case 'cupid': return ui.sel.length === 2 ? `Enamorar a ${names(ui.sel)} 💘` : `Elige a ${2 - ui.sel.length} más`;
+    case 'seer': return who ? `Espiar a ${who} 🔮` : 'Elige a alguien';
+    case 'wolves': return who ? `Atacar a ${who} 🐺` : 'Elige una víctima';
+    case 'hunter': return first === 'none' ? 'El cazador no dispara' : who ? `Disparar a ${who} 🏹` : 'Elige el objetivo';
+    case 'day': return first === 'none' ? 'Nadie es eliminado' : who ? `Eliminar a ${who} ⚖️` : 'Elige quién sale';
+    default: return 'Continuar';
   }
-  for (const p of state.players) {
-    const button = document.createElement('button'); button.className = 'quiet'; button.textContent = 'QR'; button.setAttribute('aria-label', `QR privado de ${p.name}`); button.onclick = () => showQr(p.id);
-    document.querySelector(`[data-share="${p.id}"]`).after(button);
+}
+function hostPick(before = '') {
+  const { phase } = state;
+  const ready = phase === 'cupid' ? ui.sel.length === 2 : ui.sel.length === 1;
+  const hunter = phase === 'hunter' ? player(state.hunter) : null;
+  const list = phase === 'hunter' ? alive() : selectable(phase);
+  const dayInfo = phase === 'day' ? state.events.filter(e => e.playerId && e.round === state.round).map(e => `<li>${esc(e.text)}</li>`).join('') : '';
+  const body = `
+    ${stepHead(phase, phase === 'day' ? `Día ${state.round}` : `Noche ${state.round}`)}
+    ${dayInfo ? `<section class="card alert"><h3>☀️ Esta mañana…</h3><ul class="log">${dayInfo}</ul></section>` : ''}
+    ${hunter ? `<section class="card alert"><p><strong>${esc(hunter.name)}</strong> era el cazador.</p></section>` : ''}
+    ${bubble(phase)}
+    ${before}
+    <section class="card">${tiles(list, { none: phase === 'day' ? 'Nadie (empate)' : phase === 'hunter' ? 'No dispara' : '' })}</section>`;
+  return { body, bar: barButton('confirm', confirmLabel(), { cls: phase === 'day' ? 'btn-red' : 'btn-grape', disabled: !ready }) };
+}
+function hostSeer() {
+  if (state.seen) {
+    const seen = player(state.seen), role = ROLE[seen.role];
+    const body = `
+      ${stepHead('seer', `Noche ${state.round}`)}
+      <section class="card sun center"><p class="muted">Enséñale esto solo a la vidente</p>
+        <div class="status"><span class="emoji">${role.emoji}</span><h1>${esc(seen.name)}</h1><p><span class="pill ${role.team === 'lobos' ? 'red' : 'green'}">${role.name} · ${role.team === 'lobos' ? 'es un lobo' : 'es de la aldea'}</span></p></div></section>`;
+    return { body, bar: barButton('seerDone', 'La vidente duerme →', { cls: 'btn-grape' }) };
   }
-  const indicator = document.createElement('span'); indicator.className = 'connection'; indicator.id = 'connection'; indicator.textContent = '● Conectado'; app.querySelector('.page-head').append(indicator);
+  return hostPick();
+}
+function hostWolves() {
+  const girl = alive().find(p => p.role === 'girl');
+  const caught = girl ? `<section class="card"><p>¿La niña espió y la descubrieron?</p><button class="btn btn-sm btn-red" data-act="caught">👧 Descubrieron a ${esc(girl.name)}</button></section>` : '';
+  return hostPick(caught);
+}
+function hostWitch() {
+  const victim = player(state.pendingVictim);
+  const heal = state.potions.heal && victim;
+  const poisonable = state.potions.poison;
+  const body = `
+    ${stepHead('witch', `Noche ${state.round}`)}
+    ${bubble('witch')}
+    <section class="card sun"><h3>🩸 Víctima de los lobos</h3><div class="grid"><div class="tile static">${victim ? avatar(victim) : ''}<span>${esc(victim?.name ?? 'Nadie')}</span></div></div>
+      ${heal ? `<button class="btn btn-block ${ui.heal ? 'btn-green' : 'btn-white'}" data-act="toggleHeal" aria-pressed="${ui.heal}">${ui.heal ? '💚 La bruja la salva' : '💚 Poción de vida: salvar'}</button>` : '<p class="muted">Poción de vida: ya usada.</p>'}</section>
+    <section class="card"><h3>☠️ Poción de muerte</h3>${poisonable ? `<p class="muted">Opcional: toca a quien quiera envenenar.</p>${tiles(alive())}` : '<p class="muted">Ya usada.</p>'}</section>`;
+  const label = ui.heal && ui.sel[0] ? 'Salvar y envenenar' : ui.heal ? 'Salvar a la víctima' : ui.sel[0] ? `Envenenar a ${esc(player(ui.sel[0])?.name ?? '')}` : 'La bruja no hace nada';
+  return { body, bar: barButton('confirm', `${label} →`, { cls: 'btn-grape' }) };
+}
+function hostDawn() {
+  const victim = player(state.pendingVictim);
+  const body = `
+    ${stepHead('dawn', `Noche ${state.round}`)}
+    ${bubble('dawn')}
+    <section class="card"><h3>Lo que pasó esta noche (solo tú lo ves)</h3>
+      <p>🐺 Los lobos atacaron a <strong>${esc(victim?.name ?? 'nadie')}</strong>.</p>
+      ${state.potions.heal || state.potions.poison ? '<p class="muted">La bruja aún conserva alguna poción.</p>' : ''}
+      <p class="muted">Al anunciar el amanecer se aplican las muertes y todos verán quién cayó.</p></section>`;
+  return { body, bar: barButton('dawn', 'Anunciar el amanecer ☀️', { cls: 'btn-red' }) };
+}
+
+/* — Finished — */
+
+function hostFinished() {
+  const w = WINNER[state.winner];
+  const rows = state.players.map(p => `<div class="tile static ${p.alive ? '' : 'dead'}">${avatar(p, ROLE[p.role].emoji)}<span>${esc(p.name)}<br><small class="muted">${ROLE[p.role].name}</small></span></div>`).join('');
+  const body = `
+    <section class="card sun center status"><span class="emoji winner">${w.emoji}</span><h1>${w.title}</h1><p>${w.text}</p></section>
+    <section class="card"><h3>Las cartas reveladas</h3><div class="grid">${rows}</div></section>
+    ${chronicle()}`;
+  return { body, bar: `${barButton('rematch', 'Jugar otra vez 🔄', { cls: 'btn-green' })}<p class="hint">Mismos jugadores y mismos QR. Solo se reparten cartas nuevas.</p>` };
+}
+
+/* ───────────── Player (phone as a card) ───────────── */
+
+function roleCard(p, { shooting, mine = {} } = {}) {
+  const r = ROLE[p.role];
+  const extras = [
+    mine.pack?.length ? `<span class="extra">🐺 Tu manada: ${mine.pack.map(esc).join(', ')}</span>` : '',
+    mine.lover ? `<span class="extra">💘 Enamorado/a de ${esc(mine.lover)}</span>` : ''
+  ].join('');
+  return `
+    <button class="flip role-${p.role} ${ui.revealed || !p.alive ? 'flipped' : ''} ${p.alive ? '' : 'dead'}" id="card" data-act="flip" aria-pressed="${ui.revealed || !p.alive}" aria-label="Tu carta de rol. Toca para ver u ocultar.">
+      <span class="flip-inner">
+        <span class="face face-front"><span class="big">🌙</span><span class="tap">Toca para ver tu carta</span></span>
+        <span class="face face-back"><span class="big">${r.emoji}</span><h2>${r.name}</h2><p>${r.text}</p>${extras}</span>
+      </span>
+    </button>
+    ${shooting ? '<div class="card alert center"><h3>🏹 ¡Es tu último disparo!</h3><p>Dile en voz alta al narrador a quién disparas.</p></div>' : ''}`;
+}
+function playerRoster() {
+  return `<div class="grid">${state.players.map(p => `<div class="tile static ${p.alive ? '' : 'dead'} ${p.id === state.me ? 'sel' : ''}">${avatar(p, p.role ? ROLE[p.role].emoji : '')}<span>${esc(p.name)}${p.alive ? '' : '<br><small class="muted">eliminado</small>'}</span></div>`).join('')}</div>`;
 }
 function renderPlayer() {
-  const me = state.players.find(p => p.id === state.me);
-  const active = state.phase !== 'lobby' && me.approved;
-  app.innerHTML = `<section class="player-view">
-    <p class="eyebrow">${escape(state.title)} · ${state.code}</p>
-    <h1>${escape(me.name)},<br>guarda tu secreto.</h1>
-    <span class="pill">${!me.approved ? 'Esperando aprobación' : !me.alive ? 'Has sido eliminado' : PHASE[state.phase]}${state.round ? ` · Ronda ${state.round}` : ''}</span>
-    <button class="secret-card ${revealed ? 'revealed' : 'concealed'}" id="card" aria-pressed="${revealed}" aria-label="${revealed ? 'Ocultar tu rol' : 'Revelar tu rol'}" ${!active ? 'disabled' : ''}>
-      ${revealed && active ? `<span class="card-kicker">TU ROL SECRETO</span>${art[me.role]}<h2>${ROLE[me.role]}</h2><p>${DESCRIPTION[me.role]}</p><span class="card-kicker">TOCA PARA OCULTAR</span>` : `<span class="symbol">◈</span><h2>${active ? 'Tu secreto.' : 'La noche se acerca.'}</h2><p>${active ? 'Toca para mirar tu carta. Se ocultará automáticamente en 10 segundos.' : !me.approved ? 'El narrador debe confirmar tu nombre. Quédate aquí, tu carta llegará cuando comience la partida.' : 'Ya estás en la aldea. Tu carta estará lista cuando el narrador inicie la partida.'}</p><span class="card-kicker">${active ? 'SOLO PARA TUS OJOS' : 'ESPERANDO AL NARRADOR'}</span>`}
-    </button>
-    <button class="${revealed ? 'primary' : 'secondary'}" id="role-toggle" aria-pressed="${revealed}" ${!active ? 'disabled' : ''}>${revealed ? '◈ Ocultar mi rol' : '◈ Ver mi rol'}</button>
-    <p class="fine">${active ? 'Se oculta en 10 segundos, al salir de la pantalla o con Escape.' : 'Tu rol se habilita al comenzar.'}</p>
-    <p class="muted">${state.winner ? (state.winner === 'village' ? 'Ganó la aldea. Todos los roles están revelados.' : 'Ganaron los hombres lobo. Todos los roles están revelados.') : !me.alive ? 'Guarda silencio y disfruta de las sospechas. Tu rol ya es público.' : 'Mira tu carta, guarda el celular y sigue la voz del narrador.'}</p>
-    <div class="roster">${state.players.map(p => `<span class="${p.alive ? '' : 'dead'}">${escape(p.name)}${(state.winner || !p.alive) && p.role ? ` · ${ROLE[p.role]}` : ''}</span>`).join('')}</div>
-    ${state.events.length ? `<p class="fine">${escape(state.events.at(-1).text)}</p>` : ''}
-    <span class="connection" id="connection">● Conectado</span>
-  </section>`;
-  const toggle = e => { const id = e.currentTarget.id; revealed = !revealed; clearTimeout(revealTimer); render(); document.getElementById(id)?.focus({ preventScroll: true }); if (revealed) revealTimer = setTimeout(hideRole, 10000); };
-  document.querySelector('#card').onclick = toggle;
-  document.querySelector('#role-toggle').onclick = toggle;
+  const me = player(state.me);
+  const { phase } = state;
+  if (!me?.approved) {
+    return setMain(`<section class="card sun status"><span class="emoji">⏳</span><h2>Esperando al narrador</h2><p>Hola, <strong>${esc(me?.name ?? '')}</strong>. El anfitrión tiene que aceptarte para que entres a la aldea.</p></section>`, { bare: true });
+  }
+  if (phase === 'night') {
+    return setMain(`<section class="status sleep"><span class="emoji">🌙</span><h1>Duerme…</h1><p>Cierra los ojos y baja el brillo.<br>El narrador te avisará cuando amanezca.</p></section>`, { night: true, bare: true });
+  }
+  if (phase === 'lobby') {
+    return setMain(`
+      <section class="card sun status"><span class="emoji">🏡</span><h2>¡Ya estás dentro, ${esc(me.name)}!</h2><p>Cuando el narrador reparta las cartas, aparecerá la tuya aquí.</p></section>
+      <section class="card"><h3>En la aldea (${state.players.length})</h3>${playerRoster()}</section>`, { bare: true });
+  }
+  const info = {
+    reveal: ['🃏', 'Mira tu carta en secreto', 'Tócala, memorízala y bloquea el celular.'],
+    day: ['☀️', `Día ${state.round}`, me.alive ? 'Discutan y voten en voz alta.' : '👻 Eres un fantasma: ya no hablas ni votas.'],
+    hunter: ['🏹', 'El cazador va a disparar', 'Silencio en la aldea…'],
+    finished: () => [WINNER[state.winner].emoji, WINNER[state.winner].title, WINNER[state.winner].text]
+  }[phase];
+  const banner = typeof info === 'function' ? info() : info;
+  const recent = [...state.events].reverse().slice(0, 6).map(e => `<li><small>${e.round ? `Noche ${e.round}` : 'Inicio'}</small><span>${esc(e.text)}</span></li>`).join('');
+  setMain(`
+    <section class="card ${phase === 'finished' ? 'sun' : ''} center"><h2>${banner[0]} ${banner[1]}</h2><p class="muted">${banner[2]}</p></section>
+    ${roleCard(me, { shooting: state.mine?.shooting, mine: state.mine })}
+    <section class="card"><h3>La aldea</h3>${playerRoster()}</section>
+    ${recent ? `<section class="card"><h3>📜 Lo que pasó</h3><ul class="log">${recent}</ul></section>` : ''}
+    <button class="btn btn-ghost" data-act="leave">Salir de la sala</button>`, { bare: true });
 }
-function hideRole() { clearTimeout(revealTimer); if (!revealed) return; revealed = false; if (state && !state.host) render(); }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') hideRole(); });
-function render() { if (!state) return; state.host ? renderHost() : renderPlayer(); app.dataset.phase = state.phase; if (demoRoom) renderDemoControls(); }
-async function startDemo(reset = false) {
-  app.innerHTML = '<section class="narrow panel"><h2>Preparando tu demo…</h2><p>Ocho personajes, tres roles y una aldea independiente.</p></section>';
+function flipCard() {
+  const card = $('#card'); if (!card) return;
+  ui.revealed = !ui.revealed; clearTimeout(revealTimer);
+  card.classList.toggle('flipped', ui.revealed || !player(state.me ?? '')?.alive);
+  card.setAttribute('aria-pressed', String(ui.revealed));
+  if (ui.revealed) revealTimer = setTimeout(hideCard, 10000);
+}
+function hideCard() {
+  clearTimeout(revealTimer); ui.revealed = false;
+  const card = $('#card');
+  if (card && state && player(state.me)?.alive !== false) { card.classList.remove('flipped'); card.setAttribute('aria-pressed', 'false'); }
+}
+
+/* ───────────── Actions ───────────── */
+
+async function send(action, extra = {}) {
+  if (busy || !state) return;
+  busy = true; app.classList.add('busy');
   try {
-    if (!demoRoom && !reset) { try { demoRoom = JSON.parse(sessionStorage.getItem('werewolves.demo')); } catch {} }
-    if (reset || !demoRoom) {
-      demoRoom = await request('/api/demo', { method: 'POST', body: '{}' });
-      demoPerspective = 'host';
-      try { sessionStorage.setItem('werewolves.demo', JSON.stringify(demoRoom)); } catch {}
-    }
-    await demoView();
+    state = { ...(await request(`/api/games/${session.code}/actions`, { method: 'POST', body: JSON.stringify({ action, revision: state.revision, ...extra }) })) };
+    ui.sel = [];
   } catch (error) {
-    demoRoom = null;
-    app.innerHTML = `<section class="narrow panel"><h2>No pudimos cargar la demo.</h2><p>${escape(error.message)}</p><button class="primary" id="retry-demo">Reintentar</button><a href="/" class="secondary">Inicio</a></section>`;
-    document.querySelector('#retry-demo').onclick = () => startDemo(true);
+    toast(error.message);
+    try { state = await request(`/api/games/${session.code}`); } catch { /* keep the old view */ }
+  } finally { busy = false; app.classList.remove('busy'); render(); }
+}
+function confirmStep() {
+  const first = ui.sel[0] === 'none' ? null : ui.sel[0];
+  const calls = {
+    cupid: ['couple', { playerIds: ui.sel }],
+    seer: ['inspect', { playerId: first }],
+    wolves: ['hunt', { playerId: first }],
+    witch: ['witch', { heal: ui.heal, poisonId: first || null }],
+    hunter: ['shoot', { playerId: first }],
+    day: ['vote', { playerId: first }]
+  };
+  const call = calls[state.phase];
+  if (call) send(...call);
+}
+function pick(id) {
+  if (state.phase === 'cupid') ui.sel = ui.sel.includes(id) ? ui.sel.filter(x => x !== id) : [...ui.sel, id].slice(-2);
+  else ui.sel = ui.sel[0] === id ? [] : [id];
+  render();
+}
+function setDeck(change) {
+  ui.deck = { ...ui.deck, ...change }; ui.touched = true; render();
+}
+function showCardHere(id) {
+  const p = player(id), r = ROLE[p.role];
+  openSheet(`<h2>Carta de ${esc(p.name)}</h2><p class="muted">Pásale el celular y que la mire solo.</p>
+    <button class="flip role-${p.role}" data-act="flip" id="sheet-card" aria-pressed="false"><span class="flip-inner">
+      <span class="face face-front"><span class="big">🌙</span><span class="tap">Toca para ver</span></span>
+      <span class="face face-back"><span class="big">${r.emoji}</span><h2>${r.name}</h2><p>${r.text}</p></span></span></button>`);
+}
+async function showPlayerQr(id) {
+  const p = player(id);
+  try {
+    const data = await request(`/api/games/${session.code}/qr`, { method: 'POST', body: JSON.stringify({ playerId: id }) });
+    openSheet(`<h2>Carta de ${esc(p.name)}</h2><p class="muted">Que ${esc(p.name)} escanee esto con su celular. Es solo suyo: no lo compartas.</p>
+      <div class="qr"><img src="${esc(data.image)}" alt="QR privado de ${esc(p.name)}"></div>
+      <div class="row"><button class="btn btn-sm" data-act="copyText" data-text="${esc(data.link)}">Copiar enlace</button></div>`);
+  } catch (error) { toast(error.message); }
+}
+async function share() {
+  const url = inviteLink();
+  if (navigator.share) { try { await navigator.share({ title: state.title, text: `Únete a ${state.title}`, url }); return; } catch { /* cancelled */ } }
+  copy(url, 'Enlace de invitación copiado.');
+}
+
+const ACTIONS = {
+  rules: () => $('#rules').showModal(),
+  closeSheet: closeSheets,
+  home: () => { location.hash = ''; home(); },
+  createForm, joinForm: () => joinForm(),
+  resume: () => { const s = remembered(); if (s) location.hash = `${s.code}/${s.token}`; },
+  leave: () => { if (confirm('¿Salir de esta sala en este celular?')) { forget(); location.hash = ''; home(); } },
+  pick: el => pick(el.dataset.id),
+  confirm: confirmStep,
+  toggleHeal: () => { ui.heal = !ui.heal; render(); },
+  wolves: el => setDeck({ wolf: Math.max(1, ui.deck.wolf + Number(el.dataset.delta)) }),
+  toggleRole: el => setDeck({ [el.dataset.role]: ui.deck[el.dataset.role] ? 0 : 1 }),
+  start: () => send('start', { roles: ui.deck }),
+  sleep: () => send('sleep'),
+  dawn: () => send('dawn'),
+  seerDone: () => send('seerDone'),
+  caught: () => send('caught'),
+  undo: () => send('undo'),
+  rematch: () => { ui.touched = false; send('rematch'); },
+  approve: el => send('approve', { playerId: el.dataset.id }),
+  remove: el => send('remove', { playerId: el.dataset.id }),
+  lock: () => send('lock', { open: !state.joinOpen }),
+  playerQr: el => showPlayerQr(el.dataset.id),
+  showCard: el => showCardHere(el.dataset.id),
+  copyHost: () => copy(link(session.token), 'Guardado en el portapapeles. Pégalo en tus notas.'),
+  copyInvite: () => copy(inviteLink(), 'Enlace de invitación copiado.'),
+  copyText: el => copy(el.dataset.text, 'Enlace copiado. Compártelo solo con esa persona.'),
+  share,
+  flip: el => {
+    if (el.id === 'sheet-card') { const open = el.classList.toggle('flipped'); el.setAttribute('aria-pressed', String(open)); if (open) setTimeout(() => el.classList.remove('flipped'), 6000); return; }
+    flipCard();
   }
-}
-async function demoView() {
-  clearTimeout(revealTimer); revealed = false;
-  const player = demoRoom.players.find(p => p.id === demoPerspective);
-  session = { code: demoRoom.code, token: player ? player.token : demoRoom.token };
-  state = await request(`/api/games/${session.code}`); render();
-}
-function renderDemoControls() {
-  const panel = document.createElement('section'); panel.className = 'demo-toolbar panel';
-  panel.innerHTML = `<p class="eyebrow">LABORATORIO · NO ES UNA PARTIDA REAL</p><h2>Prueba cada perspectiva.</h2><p class="muted">Los controles de abajo solo afectan esta aldea de práctica. Las cartas mantienen los mismos permisos que en una partida real.</p><div class="demo-fields"><div><label class="field" for="demo-perspective">Ver como</label><select id="demo-perspective"><option value="host">Narrador · todas las cartas</option>${demoRoom.players.map(p => `<option value="${p.id}" ${demoPerspective === p.id ? 'selected' : ''}>${escape(p.name)} · ${ROLE[p.role]}</option>`).join('')}</select></div><div><label class="field" for="demo-scenario">Guion del avance automático</label><select id="demo-scenario">${[['village','Gana la aldea'],['wolves','Ganan los lobos'],['seer','Muere la vidente'],['tie','Empate sin eliminación']].map(([id,label]) => `<option value="${id}" ${demoScenario === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div></div><div class="actions"><button class="primary" id="demo-next" ${state.winner ? 'disabled data-locked="true"' : ''}>${state.phase === 'lobby' ? 'Iniciar la noche' : 'Avanzar una fase'} ↗</button><button class="secondary" id="demo-replay">Repetir animación</button><button class="secondary" id="demo-reset">Nueva demo</button><a class="quiet" href="/">Ir al juego real ↗</a></div><p class="fine" aria-live="polite">${PHASE[state.phase]} · ronda ${state.round} · prueba también los botones reales del narrador, las cartas y los QR. Cambiar perspectiva siempre oculta tu carta.</p>`;
-  app.prepend(panel);
-  panel.querySelector('#demo-perspective').onchange = async e => { if (busy) return; demoPerspective = e.target.value; try { await demoView(); } catch (error) { notify(error.message); } };
-  panel.querySelector('#demo-scenario').onchange = e => { demoScenario = e.target.value; };
-  panel.querySelector('#demo-reset').onclick = () => { if (!busy) startDemo(true); };
-  panel.querySelector('#demo-replay').onclick = () => { render(); };
-  panel.querySelector('#demo-next').onclick = demoNext;
-}
-async function demoNext() {
-  if (busy) return; busy = true;
-  app.querySelectorAll('button,select,input').forEach(b => { b.disabled = true; });
+};
+
+/* ───────────── Events ───────────── */
+
+document.addEventListener('click', event => {
+  const el = event.target.closest('[data-act]');
+  if (!el || !ACTIONS[el.dataset.act]) return;
+  ACTIONS[el.dataset.act](el);
+});
+document.addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.target, button = form.querySelector('[type=submit]');
+  if (form.id === 'add') { const name = form.elements.namedItem('name').value; if (name.trim()) send('add', { name }); return; }
+  if (form.id === 'create') {
+    button.disabled = true;
+    try { const data = await request('/api/games', { method: 'POST', body: JSON.stringify({ title: form.elements.namedItem('title').value }) }); remember({ code: data.code, token: data.token }); location.hash = `${data.code}/${data.token}`; }
+    catch (error) { toast(error.message); button.disabled = false; }
+  }
+  if (form.id === 'join') await submitJoin(form, button);
+});
+let pendingToken;
+async function submitJoin(form, button) {
+  const input = form.elements.code.value.trim();
+  const privateLinkMatch = input.match(/#([A-F0-9]{8})\/([A-Za-z0-9_-]{43})$/i);
+  if (privateLinkMatch) { location.hash = `${privateLinkMatch[1].toUpperCase()}/${privateLinkMatch[2]}`; return; }
+  const code = (input.match(/#join\/([A-F0-9]{8})$/i)?.[1] || input).toUpperCase().replace(/[\s-]/g, '');
+  if (!/^[A-F0-9]{8}$/.test(code)) return toast('El código tiene 8 letras y números. Revisa lo que te dio el narrador.');
+  const saved = remembered();
+  if (saved?.code === code) { location.hash = `${saved.code}/${saved.token}`; return; }
+  const name = form.elements.playerName.value.trim();
+  if (!name) return toast('Escribe tu nombre para pedir entrada.');
+  button.disabled = true;
+  if (!pendingToken) pendingToken = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   try {
-    const headers = { Authorization: `Bearer ${demoRoom.token}` };
-    const host = await request(`/api/games/${demoRoom.code}`, { headers });
-    const living = host.players.filter(p => p.alive);
-    let input;
-    if (host.phase === 'lobby') input = { action: 'start' };
-    if (host.phase === 'seer') input = { action: 'inspect', playerId: living.find(p => p.role === 'wolf').id };
-    if (host.phase === 'wolves') input = { action: 'hunt', playerId: (living.find(p => p.role === (demoScenario === 'seer' ? 'seer' : 'villager')) || living.find(p => p.role !== 'wolf')).id };
-    if (host.phase === 'dawn') input = { action: 'dawn' };
-    if (host.phase === 'day') input = { action: 'vote', playerId: demoScenario === 'tie' ? null : (living.find(p => p.role === (demoScenario === 'wolves' ? 'villager' : 'wolf')) || living.find(p => p.role !== 'wolf')).id };
-    if (input) await request(`/api/games/${demoRoom.code}/actions`, { headers, method: 'POST', body: JSON.stringify({ ...input, revision: host.revision }) });
-    await demoView();
-  } catch (error) { notify(error.message); render(); }
-  finally { busy = false; }
+    const data = await request(`/api/games/${code}/join`, { method: 'POST', body: JSON.stringify({ name, token: pendingToken }) });
+    remember({ code: data.code, token: data.token }); location.hash = `${data.code}/${data.token}`;
+  } catch (error) { toast(error.message); button.disabled = false; }
 }
-document.querySelector('#rules-open').onclick = () => { revealed = false; clearTimeout(revealTimer); if (state && !state.host) render(); document.querySelector('#rules').showModal(); };
-document.querySelector('#rules-close').onclick = () => document.querySelector('#rules').close();
-document.addEventListener('visibilitychange', () => { if (document.hidden) hideRole(); });
-window.addEventListener('pagehide', hideRole);
-window.addEventListener('hashchange', enter);
-setInterval(async () => {
-  if (!session || !state || busy || pollBusy || document.hidden) return;
-  pollBusy = true;
-  const currentSession = session;
-  try {
-    const next = await request(`/api/games/${session.code}`);
-    if (session === currentSession && state && !busy) {
-      if (next.revision !== state.revision) { state = next; revealed = false; render(); }
-      const indicator = document.querySelector('#connection'); if (indicator) { indicator.textContent = '● Conectado'; indicator.classList.remove('warning'); }
+document.addEventListener('keydown', event => { if (event.key === 'Escape') hideCard(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) hideCard(); else poll(); });
+addEventListener('hashchange', enter);
+$('#sheet').addEventListener('close', () => { ui.revealed = false; });
+
+/* ───────────── Boot, routing, polling ───────────── */
+
+async function keepAwake() {
+  try { wakeLock = await navigator.wakeLock?.request('screen'); wakeLock?.addEventListener('release', () => { wakeLock = null; }); } catch { wakeLock = null; }
+}
+function stopPolling() { clearTimeout(pollTimer); pollTimer = undefined; }
+async function poll() {
+  clearTimeout(pollTimer);
+  if (!session || !state) return;
+  if (!document.hidden && !busy) {
+    try {
+      const data = await request(`/api/games/${session.code}`);
+      ui.offline = 0; $('#net').hidden = true;
+      if (data.revision !== state.revision || data.phase !== state.phase) { state = data; render(); }
+    } catch (error) {
+      if ([401, 403, 404].includes(error.status)) { stopPolling(); forget(); return failure(new Error('Ya no formas parte de esta aldea (la sala expiró o te quitaron).')); }
+      ui.offline++; if (ui.offline > 1) $('#net').hidden = false;
     }
-  } catch {
-    const indicator = document.querySelector('#connection'); if (indicator) { indicator.textContent = '○ Sin conexión. Reintentando…'; indicator.classList.add('warning'); }
   }
-  finally { pollBusy = false; }
-}, 5000);
+  pollTimer = setTimeout(poll, 3000);
+}
+async function enter() {
+  stopPolling(); closeSheets(); hideCard(); ui = fresh(); animateNext = true;
+  if (/^\/demo\/?$/.test(location.pathname)) return startDemo();
+  const invitation = location.hash.match(/^#join\/([A-F0-9]{8})$/i);
+  if (invitation) return joinForm(invitation[1].toUpperCase(), true);
+  const match = location.hash.match(/^#([A-F0-9]{8})\/([A-Za-z0-9_-]{43})$/);
+  if (!match) { home(); if (location.hash) toast('Ese enlace no es válido. Pídele uno nuevo al narrador.'); return; }
+  session = { code: match[1], token: match[2] }; state = null;
+  setMain('<section class="card sun status"><span class="emoji">🔎</span><h2>Buscando tu lugar en la aldea…</h2></section>');
+  try {
+    const data = await request(`/api/games/${session.code}`);
+    state = { ...data, code: session.code }; remember(session);
+    render(); pollTimer = setTimeout(poll, 3000);
+  } catch (error) { failure(error); }
+}
+async function startDemo() {
+  setMain('<section class="card sun status"><span class="emoji">🧪</span><h2>Preparando jugadores de práctica…</h2></section>');
+  try {
+    session = null;
+    const data = await request('/api/demo', { method: 'POST', body: '{}' });
+    remember({ code: data.code, token: data.token });
+    history.replaceState(null, '', `/#${data.code}/${data.token}`);
+    await enter();
+  } catch (error) { failure(error); }
+}
+
+fillRules();
 enter();
