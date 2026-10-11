@@ -14,7 +14,7 @@ export function name(value) {
 }
 export function newGame(title, victory = 'elimination') {
   requireThat(['elimination', 'parity'].includes(victory), 'Regla de victoria inválida.');
-  return { title: name(title), victory, phase: 'lobby', round: 0, revision: 0, players: [], events: [], inspections: [], winner: null };
+  return { title: name(title), victory, phase: 'lobby', joinOpen: true, round: 0, revision: 0, players: [], events: [], inspections: [], winner: null };
 }
 function alive(game, id) {
   const player = game.players.find(p => p.id === id && p.alive);
@@ -41,9 +41,19 @@ export function action(game, body) {
       lobby(); requireThat(game.players.length < 18, 'La sala admite hasta 18 jugadores.');
       const displayName = name(body.name);
       requireThat(!game.players.some(p => p.name.toLocaleLowerCase() === displayName.toLocaleLowerCase()), 'Ese nombre ya está en la sala.');
-      game.players.push({ id: randomBytes(8).toString('hex'), token: token(), name: displayName, role: 'villager', alive: true });
+      game.players.push({ id: randomBytes(8).toString('hex'), token: token(), name: displayName, role: 'villager', alive: true, approved: true });
       break;
     }
+    case 'join': {
+      lobby(); requireThat(game.joinOpen !== false, 'El narrador cerró el ingreso a la sala.', 409);
+      requireThat(typeof body.token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(body.token), 'Credencial de ingreso inválida.');
+      if (game.players.some(p => p.token === body.token)) return game;
+      action(game, { action: 'add', name: body.name });
+      const p = game.players.at(-1); p.token = body.token; p.approved = false;
+      return game;
+    }
+    case 'approve': lobby(); alive(game, body.playerId).approved = true; break;
+    case 'lock': lobby(); requireThat(typeof body.open === 'boolean', 'Estado inválido.'); game.joinOpen = body.open; break;
     case 'remove': lobby(); requireThat(game.players.some(p => p.id === body.playerId), 'Jugador inexistente.'); game.players = game.players.filter(p => p.id !== body.playerId); break;
     case 'role': lobby(); requireThat(roles.includes(body.role), 'Rol inválido.'); alive(game, body.playerId).role = body.role; break;
     case 'shuffle': {
@@ -57,10 +67,11 @@ export function action(game, body) {
     }
     case 'start': {
       lobby(); requireThat(game.players.length >= 4, 'Se necesitan al menos 4 jugadores; el manual recomienda 8 a 18.');
+      requireThat(game.players.every(p => p.approved !== false), 'Aprueba o quita a los jugadores pendientes.');
       const wolves = game.players.filter(p => p.role === 'wolf').length;
       requireThat(wolves >= 1 && wolves < game.players.length / 2, 'Debe haber al menos un lobo y menos lobos que aldeanos.');
       requireThat(game.players.filter(p => p.role === 'seer').length === 1, 'Asigna exactamente una vidente.');
-      event(game, 'La aldea se duerme. Comienza la partida.'); nextNight(game); break;
+      game.joinOpen = false; event(game, 'La aldea se duerme. Comienza la partida.'); nextNight(game); break;
     }
     case 'inspect': {
       requireThat(game.phase === 'seer', 'No es el turno de la vidente.', 409);
@@ -95,8 +106,8 @@ export function action(game, body) {
 export function view(game, host, viewer) {
   const started = game.phase !== 'lobby';
   const result = {
-    title: game.title, victory: game.victory, phase: game.phase, round: game.round, revision: game.revision, winner: game.winner,
-    players: game.players.map(p => ({ id: p.id, name: p.name, alive: p.alive, ...(host || (started && (!p.alive || game.winner || viewer?.id === p.id)) ? { role: p.role } : {}), ...(host ? { token: p.token } : {}) })),
+    title: game.title, victory: game.victory, phase: game.phase, joinOpen: game.joinOpen !== false, round: game.round, revision: game.revision, winner: game.winner,
+    players: game.players.map(p => ({ id: p.id, name: p.name, alive: p.alive, approved: p.approved !== false, ...(host || (started && viewer?.approved !== false && (!p.alive || game.winner || viewer?.id === p.id)) ? { role: p.role } : {}), ...(host ? { token: p.token } : {}) })),
     events: game.events,
     ...(host ? { inspections: game.inspections, pendingVictim: game.pendingVictim } : {}),
     ...(viewer ? { me: viewer.id } : {})

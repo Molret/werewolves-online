@@ -60,5 +60,5 @@ test('removed links are revoked and invalid JSON is rejected', async t => {
   assert.equal((await api(path, player.token)).status, 200);
   await api(path + '/actions', token, { action: 'remove', playerId: player.id, revision: 1 });
   assert.equal((await api(path, player.token)).status, 403);
-  const invalid = await fetch(`${base}/api/games`, { method: 'POST', body: '{' }); assert.equal(invalid.status, 400);
+  const invalid = await fetch(`${base}/api/games`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' }); assert.equal(invalid.status, 400);
 });

@@ -1,49 +1,49 @@
-# Arquitectura y alcance de v0.1
+# Arquitectura v0.2
 
-## Componentes
+## Piezas
 
-- Node.js 24 sirve una interfaz HTML/CSS/JS y una API HTTP del mismo origen.
-- SQLite nativo conserva el estado de la partida. No se requiere instalar paquetes.
-- `src/game.js` implementa las transiciones y construye las vistas según permisos.
-- `src/server.js` autentica los enlaces privados, valida revisiones y persiste los cambios.
-- `public/app.js` contiene el panel del narrador y la carta móvil.
+- `src/game.js`: motor y filtrado de vistas según permisos.
+- `src/http.js`: handler Web Request/Response compartido entre Vercel y desarrollo local.
+- `src/storage.js`: Neon por HTTP, inicialización idempotente, compare-and-swap y límites persistentes.
+- `src/sqlite.js`: almacenamiento local con la misma interfaz y actualización condicional.
+- `src/server.js`: servidor de desarrollo y alternativa para Docker.
+- `api/index.js`: entrada Node.js para Vercel; no importa SQLite ni escribe en disco.
+- `public/`: interfaz sin framework, con polling cada 5 segundos y pausa al ocultar la pestaña.
 
 ## API
 
-`POST /api/games`: `{ "title": "La aldea", "victory": "elimination" }`. Devuelve código de sala y credencial de narrador. `victory` también acepta `parity`.
-
-`GET /api/games/:code`: requiere `Authorization: Bearer <token>`. El narrador recibe todos los roles y los enlaces de jugadores. Cada jugador recibe su propio rol solo después de iniciar, además de nombres, estado y roles públicamente revelados. Nunca recibe enlaces ajenos, consultas de la vidente ni la víctima pendiente.
-
-`POST /api/games/:code/actions`: solo para el narrador. Requiere `{ "action": "...", "revision": <última revisión> }` y los campos correspondientes:
-
-| Acción | Campos | Fase |
+| Ruta | Acceso | Resultado |
 | --- | --- | --- |
-| `add` | `name` | Preparación |
-| `remove` | `playerId` | Preparación |
-| `role` | `playerId`, `role`: `wolf`, `seer` o `villager` | Preparación |
-| `shuffle` | `wolves`: entero positivo | Preparación |
-| `start` | Ninguno | Preparación |
-| `inspect` | `playerId` | Vidente |
-| `hunt` | `playerId` | Lobos |
-| `dawn` | Ninguno | Amanecer |
-| `vote` | `playerId` o `null` si nadie es eliminado | Día |
+| `GET /api/health` | Público | Disponibilidad del almacenamiento |
+| `POST /api/games` | Público limitado | Crea sala y devuelve credencial del narrador |
+| `GET /api/games/:code/lobby` | Público limitado | Título, número de jugadores y estado de ingreso, sin nombres ni roles |
+| `POST /api/games/:code/join` | Público limitado | Registro de un jugador pendiente de aprobación |
+| `GET /api/games/:code` | Bearer privado | Vista del narrador o del jugador correspondiente |
+| `POST /api/games/:code/actions` | Narrador | Aplica acción con revisión esperada |
+| `POST /api/games/:code/qr` | Narrador | Genera un QR de sala o de carta, sin servicios externos |
 
-Las revisiones incompatibles devuelven 409 y la interfaz recarga el estado. El proceso relee el estado después de recibir el cuerpo para evitar sobrescrituras por acciones simultáneas dentro de esa instancia. Un motor completamente síncrono aplica y persiste cada transición sin ceder el control entre lectura y escritura. Despliega una única instancia del proceso.
+Crear sala acepta `title` y `victory` (`elimination` o `parity`). Ingreso acepta `name` y un `token` opcional de 256 bits generado por el cliente. Usar el mismo token hace idempotente el reintento de ingreso, incluso después de cerrar el lobby. Esto no permite obtener una carta por nombre.
 
-## Privacidad y límites
+Acciones: `add` con `name`; `remove`, `approve` e `inspect` con `playerId`; `role` con `playerId` y `role`; `shuffle` con `wolves`; `lock` con `open`; `start`; `hunt` con `playerId`; `dawn`; `vote` con `playerId` o `null`. Solo el endpoint de ingreso puede ejecutar el registro público. Todas las acciones del narrador requieren `revision`.
 
-Credenciales de 256 bits y código público independiente. La base conserva hash de la credencial del narrador y credenciales de jugador, necesarias para que el narrador recupere y comparta las cartas. El acceso es por posesión del enlace, sin cuentas ni verificación de identidad. Quitar un jugador durante la preparación invalida su enlace.
+## Concurrencia y persistencia
 
-La API no ofrece una vista pública sin credencial. Hay límites por IP para crear salas y por credencial para acceder a una sala. Los límites viven en memoria, se reinician con el proceso y usan la IP directa del socket; no se confía en `X-Forwarded-For`. Un proxy compartirá el límite global entre sus visitantes. Para exposición a gran escala, agrega límites en el proxy.
+En Neon, una actualización usa `UPDATE ... WHERE revision = expected RETURNING code`. Solo una función puede ganar una revisión; las otras devuelven 409. Esto también cubre el ingreso de jugadores. No hay mutex ni estado de salas en memoria. SQLite usa una condición equivalente sobre la revisión almacenada en el JSON.
 
-Sin CORS abierto; se valida `Origin` cuando está presente. El servicio envía CSP, `no-store` y `no-referrer`. La interfaz escapa los nombres antes de incluirlos en HTML. Sirve únicamente archivos de una lista fija.
+Una fila conserva todo el estado de una sala. Es adecuado para grupos de 18 personas; no se agregan servicios adicionales para una partida presencial. Las tablas llevan prefijo `werewolves_`. La caducidad se comprueba al leer y la purga se ejecuta al crear salas.
 
-Los jugadores cierran los ojos de verdad y el narrador comunica la consulta de la vidente en persona. El teléfono no es un mecanismo contra miradas ajenas: ocultar la carta es una ayuda visual, y el propio jugador autorizado puede consultar su rol con herramientas del navegador.
+Los límites por minuto usan UPSERT en la misma base: creación por IP, ingreso/consulta pública por IP y lectura/acciones por hash de credencial. En Vercel se usa el encabezado de IP que proporciona la plataforma; en desarrollo local, la dirección del socket. La tabla almacena un hash de la clave de límite, no la IP o credencial en claro.
 
-## Validación
+## Privacidad
 
-Pruebas con `node:test`: secuencia de fases, victorias de ambos equipos, variante de paridad, muerte de la vidente, restricciones de objetivos, reparto aleatorio, ausencia de roles ajenos en la API, rechazo de credenciales inválidas, permisos del narrador, revocación de enlaces, control de revisiones simultáneas, origen, reinicios y caducidad.
+El código de sala nunca autoriza la lectura de roles. El narrador recibe los roles y enlaces para repartirlos. El jugador solo ve su propio rol tras comenzar y los roles ya públicos por eliminación o fin de partida. No recibe consultas de la vidente ni la víctima nocturna pendiente.
 
-## Próximas versiones
+Los enlaces de 256 bits viajan en el fragmento URL, no en la ruta HTTP, y se envían como `Authorization`. Quien posea un enlace privado puede utilizarlo: no hay cuentas ni verificación fuerte de identidad. El narrador aprueba a los invitados; también puede retirar un jugador y revocar su enlace antes de empezar. No hay todavía rotación de credenciales.
 
-Personajes avanzados, recuperación o rotación de enlaces, QR para cartas y transporte de actualizaciones por SSE pueden añadirse después. No se presentan como funcionalidades disponibles en la interfaz actual.
+Se valida el origen, el objeto JSON y el tamaño de cuerpo (16 KiB). CSP sin scripts externos, `no-store`, `no-referrer`, escape HTML de nombres y lista fija de archivos locales. Los QR se codifican dentro del servidor, sin enviar los enlaces a un generador de terceros. Los errores internos registran identificador y tipo, no URLs de base de datos, cuerpos o credenciales.
+
+## Verificación
+
+Pruebas con `node:test`, API HTTP real y DOM con jsdom. Cubren condiciones de victoria, fases, rol privado, QR, aprobación, cierre de ingreso, revocación, idempotencia, solicitudes simultáneas entre handlers, límites compartidos, tamaño de cuerpo, origen, persistencia y expiración.
+
+Los tests DOM comprueban comportamiento, no diseño visual, cámara ni escaneo físico de QR. Sigue siendo necesaria una prueba presencial en celulares.
