@@ -29,12 +29,21 @@ export function apiHandler(store, { now = Date.now } = {}) {
       const path = url.pathname;
       const limit = async (scope, max) => requireThat(await store.limit(`${ip}:${scope}`, max, now()), 'Demasiadas solicitudes. Espera un minuto.', 429);
       if (path === '/api/health' && request.method === 'GET') { await store.get('__health__'); return json({ ok: true, storage: 'persistent' }); }
-      if (path === '/api/games' && request.method === 'POST') {
+      if ((path === '/api/games' || path === '/api/demo') && request.method === 'POST') {
         await limit('create', 10); const input = await body(request); const game = newGame(input.title || 'La aldea', input.victory); const hostToken = token();
+        const demo = path === '/api/demo';
+        if (demo) {
+          game.title = 'La aldea de práctica';
+          for (const [i, name] of ['Luna', 'Bruno', 'Alma', 'Mateo', 'Sofía', 'Leo', 'Emma', 'Nico'].entries()) {
+            action(game, { action: 'add', name });
+            action(game, { action: 'role', playerId: game.players.at(-1).id, role: i < 2 ? 'wolf' : i === 2 ? 'seer' : 'villager' });
+          }
+          action(game, { action: 'lock', open: false });
+        }
         await store.clean(now());
         const code = randomBytes(4).toString('hex').toUpperCase();
         requireThat(await store.insert(code, digest(hostToken), game, now()), 'Intenta crear la sala de nuevo.', 409);
-        return json({ code, token: hostToken, host: true, ...view(game, true) }, 201);
+        return json({ code, token: hostToken, host: true, demo, ...view(game, true) }, 201);
       }
       const match = path.match(/^\/api\/games\/([A-F0-9]{8})(?:\/(actions|join|lobby|qr))?$/);
       requireThat(match, 'Ruta no encontrada.', 404);

@@ -10,6 +10,8 @@ const art = {
 };
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let session = null, state = null, revealed = false, revealTimer, busy = false, pollBusy = false, noticeTimer;
+const demoMode = /^\/demo\/?$/.test(location.pathname);
+let demoRoom = null, demoPerspective = 'host', demoScenario = 'village';
 function remember(value) { try { localStorage.setItem('werewolves.session', JSON.stringify(value)); } catch {} }
 function remembered() { try { return JSON.parse(localStorage.getItem('werewolves.session')); } catch { return null; } }
 function notify(text) { const box = document.querySelector('#message'); box.textContent = text; box.hidden = false; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { box.hidden = true; }, 6000); }
@@ -30,6 +32,7 @@ function home() {
   document.querySelector('#create-open').onclick = createForm;
   document.querySelector('#join-open').onclick = joinForm;
   document.querySelector('#join-open').textContent = 'Entrar con código';
+  const demoLink = document.createElement('a'); demoLink.href = '/demo'; demoLink.className = 'quiet'; demoLink.textContent = 'Probar la demo ↗'; document.querySelector('#join-open').after(demoLink);
   if (saved) document.querySelector('#resume').onclick = () => { location.hash = `${saved.code}/${saved.token}`; };
 }
 function createForm() {
@@ -65,6 +68,7 @@ function joinForm(code = '') {
 }
 async function enter() {
   clearTimeout(revealTimer); revealed = false;
+  if (demoMode) { await startDemo(); return; }
   const invitation = location.hash.match(/^#join\/([A-F0-9]{8})$/i);
   if (invitation) { joinForm(invitation[1].toUpperCase()); return; }
   const match = location.hash.match(/^#([A-F0-9]{8})\/([A-Za-z0-9_-]{43})$/);
@@ -113,7 +117,7 @@ function renderHostBase() {
   const start = document.querySelector('#start'); if (start) start.onclick = () => send('start');
   const dawn = document.querySelector('#dawn'); if (dawn) dawn.onclick = () => send('dawn');
   const form = document.querySelector('#phase-form');
-  if (form) form.onsubmit = e => { e.preventDefault(); const target = form.playerId.value; if (!target) return notify('Selecciona un jugador o un empate persistente.'); const action = { seer: 'inspect', wolves: 'hunt', day: 'vote' }[state.phase]; if (action === 'vote' && !confirm(target === 'none' ? '¿Cerrar la votación sin eliminar a nadie?' : `¿Eliminar a ${state.players.find(p => p.id === target).name}?`)) return; send(action, { playerId: target === 'none' ? null : target }); };
+  if (form) form.onsubmit = e => { e.preventDefault(); const target = form.elements.namedItem('playerId').value; if (!target) return notify('Selecciona un jugador o un empate persistente.'); const action = { seer: 'inspect', wolves: 'hunt', day: 'vote' }[state.phase]; if (action === 'vote' && !confirm(target === 'none' ? '¿Cerrar la votación sin eliminar a nadie?' : `¿Eliminar a ${state.players.find(p => p.id === target).name}?`)) return; send(action, { playerId: target === 'none' ? null : target }); };
   const again = document.querySelector('#new-game'); if (again) again.onclick = () => { history.replaceState(null, '', '/'); session = null; state = null; createForm(); };
 }
 async function showQr(playerId) {
@@ -159,21 +163,77 @@ function renderPlayer() {
     <p class="eyebrow">${escape(state.title)} · ${state.code}</p>
     <h1>${escape(me.name)},<br>guarda tu secreto.</h1>
     <span class="pill">${!me.approved ? 'Esperando aprobación' : !me.alive ? 'Has sido eliminado' : PHASE[state.phase]}${state.round ? ` · Ronda ${state.round}` : ''}</span>
-    <button class="secret-card" id="card" aria-label="${revealed ? 'Ocultar tu rol' : 'Revelar tu rol'}" ${!active ? 'disabled' : ''}>
+    <button class="secret-card ${revealed ? 'revealed' : 'concealed'}" id="card" aria-pressed="${revealed}" aria-label="${revealed ? 'Ocultar tu rol' : 'Revelar tu rol'}" ${!active ? 'disabled' : ''}>
       ${revealed && active ? `<span class="card-kicker">TU ROL SECRETO</span>${art[me.role]}<h2>${ROLE[me.role]}</h2><p>${DESCRIPTION[me.role]}</p><span class="card-kicker">TOCA PARA OCULTAR</span>` : `<span class="symbol">◈</span><h2>${active ? 'Tu secreto.' : 'La noche se acerca.'}</h2><p>${active ? 'Toca para mirar tu carta. Se ocultará automáticamente en 10 segundos.' : !me.approved ? 'El narrador debe confirmar tu nombre. Quédate aquí, tu carta llegará cuando comience la partida.' : 'Ya estás en la aldea. Tu carta estará lista cuando el narrador inicie la partida.'}</p><span class="card-kicker">${active ? 'SOLO PARA TUS OJOS' : 'ESPERANDO AL NARRADOR'}</span>`}
     </button>
+    <button class="${revealed ? 'primary' : 'secondary'}" id="role-toggle" aria-pressed="${revealed}" ${!active ? 'disabled' : ''}>${revealed ? '◈ Ocultar mi rol' : '◈ Ver mi rol'}</button>
+    <p class="fine">${active ? 'Se oculta en 10 segundos, al salir de la pantalla o con Escape.' : 'Tu rol se habilita al comenzar.'}</p>
     <p class="muted">${state.winner ? (state.winner === 'village' ? 'Ganó la aldea. Todos los roles están revelados.' : 'Ganaron los hombres lobo. Todos los roles están revelados.') : !me.alive ? 'Guarda silencio y disfruta de las sospechas. Tu rol ya es público.' : 'Mira tu carta, guarda el celular y sigue la voz del narrador.'}</p>
     <div class="roster">${state.players.map(p => `<span class="${p.alive ? '' : 'dead'}">${escape(p.name)}${(state.winner || !p.alive) && p.role ? ` · ${ROLE[p.role]}` : ''}</span>`).join('')}</div>
     ${state.events.length ? `<p class="fine">${escape(state.events.at(-1).text)}</p>` : ''}
     <span class="connection" id="connection">● Conectado</span>
   </section>`;
-  const card = document.querySelector('#card'); card.onclick = () => { revealed = !revealed; clearTimeout(revealTimer); renderPlayer(); if (revealed) revealTimer = setTimeout(() => { revealed = false; if (state && !state.host) renderPlayer(); }, 10000); };
+  const toggle = e => { const id = e.currentTarget.id; revealed = !revealed; clearTimeout(revealTimer); render(); document.getElementById(id)?.focus({ preventScroll: true }); if (revealed) revealTimer = setTimeout(hideRole, 10000); };
+  document.querySelector('#card').onclick = toggle;
+  document.querySelector('#role-toggle').onclick = toggle;
 }
-function render() { if (!state) return; state.host ? renderHost() : renderPlayer(); }
+function hideRole() { clearTimeout(revealTimer); if (!revealed) return; revealed = false; if (state && !state.host) render(); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideRole(); });
+function render() { if (!state) return; state.host ? renderHost() : renderPlayer(); app.dataset.phase = state.phase; if (demoRoom) renderDemoControls(); }
+async function startDemo(reset = false) {
+  app.innerHTML = '<section class="narrow panel"><h2>Preparando tu demo…</h2><p>Ocho personajes, tres roles y una aldea independiente.</p></section>';
+  try {
+    if (!demoRoom && !reset) { try { demoRoom = JSON.parse(sessionStorage.getItem('werewolves.demo')); } catch {} }
+    if (reset || !demoRoom) {
+      demoRoom = await request('/api/demo', { method: 'POST', body: '{}' });
+      demoPerspective = 'host';
+      try { sessionStorage.setItem('werewolves.demo', JSON.stringify(demoRoom)); } catch {}
+    }
+    await demoView();
+  } catch (error) {
+    demoRoom = null;
+    app.innerHTML = `<section class="narrow panel"><h2>No pudimos cargar la demo.</h2><p>${escape(error.message)}</p><button class="primary" id="retry-demo">Reintentar</button><a href="/" class="secondary">Inicio</a></section>`;
+    document.querySelector('#retry-demo').onclick = () => startDemo(true);
+  }
+}
+async function demoView() {
+  clearTimeout(revealTimer); revealed = false;
+  const player = demoRoom.players.find(p => p.id === demoPerspective);
+  session = { code: demoRoom.code, token: player ? player.token : demoRoom.token };
+  state = await request(`/api/games/${session.code}`); render();
+}
+function renderDemoControls() {
+  const panel = document.createElement('section'); panel.className = 'demo-toolbar panel';
+  panel.innerHTML = `<p class="eyebrow">LABORATORIO · NO ES UNA PARTIDA REAL</p><h2>Prueba cada perspectiva.</h2><p class="muted">Los controles de abajo solo afectan esta aldea de práctica. Las cartas mantienen los mismos permisos que en una partida real.</p><div class="demo-fields"><div><label class="field" for="demo-perspective">Ver como</label><select id="demo-perspective"><option value="host">Narrador · todas las cartas</option>${demoRoom.players.map(p => `<option value="${p.id}" ${demoPerspective === p.id ? 'selected' : ''}>${escape(p.name)} · ${ROLE[p.role]}</option>`).join('')}</select></div><div><label class="field" for="demo-scenario">Guion del avance automático</label><select id="demo-scenario">${[['village','Gana la aldea'],['wolves','Ganan los lobos'],['seer','Muere la vidente'],['tie','Empate sin eliminación']].map(([id,label]) => `<option value="${id}" ${demoScenario === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div></div><div class="actions"><button class="primary" id="demo-next" ${state.winner ? 'disabled data-locked="true"' : ''}>${state.phase === 'lobby' ? 'Iniciar la noche' : 'Avanzar una fase'} ↗</button><button class="secondary" id="demo-replay">Repetir animación</button><button class="secondary" id="demo-reset">Nueva demo</button><a class="quiet" href="/">Ir al juego real ↗</a></div><p class="fine" aria-live="polite">${PHASE[state.phase]} · ronda ${state.round} · prueba también los botones reales del narrador, las cartas y los QR. Cambiar perspectiva siempre oculta tu carta.</p>`;
+  app.prepend(panel);
+  panel.querySelector('#demo-perspective').onchange = async e => { if (busy) return; demoPerspective = e.target.value; try { await demoView(); } catch (error) { notify(error.message); } };
+  panel.querySelector('#demo-scenario').onchange = e => { demoScenario = e.target.value; };
+  panel.querySelector('#demo-reset').onclick = () => { if (!busy) startDemo(true); };
+  panel.querySelector('#demo-replay').onclick = () => { render(); };
+  panel.querySelector('#demo-next').onclick = demoNext;
+}
+async function demoNext() {
+  if (busy) return; busy = true;
+  app.querySelectorAll('button,select,input').forEach(b => { b.disabled = true; });
+  try {
+    const headers = { Authorization: `Bearer ${demoRoom.token}` };
+    const host = await request(`/api/games/${demoRoom.code}`, { headers });
+    const living = host.players.filter(p => p.alive);
+    let input;
+    if (host.phase === 'lobby') input = { action: 'start' };
+    if (host.phase === 'seer') input = { action: 'inspect', playerId: living.find(p => p.role === 'wolf').id };
+    if (host.phase === 'wolves') input = { action: 'hunt', playerId: (living.find(p => p.role === (demoScenario === 'seer' ? 'seer' : 'villager')) || living.find(p => p.role !== 'wolf')).id };
+    if (host.phase === 'dawn') input = { action: 'dawn' };
+    if (host.phase === 'day') input = { action: 'vote', playerId: demoScenario === 'tie' ? null : (living.find(p => p.role === (demoScenario === 'wolves' ? 'villager' : 'wolf')) || living.find(p => p.role !== 'wolf')).id };
+    if (input) await request(`/api/games/${demoRoom.code}/actions`, { headers, method: 'POST', body: JSON.stringify({ ...input, revision: host.revision }) });
+    await demoView();
+  } catch (error) { notify(error.message); render(); }
+  finally { busy = false; }
+}
 document.querySelector('#rules-open').onclick = () => { revealed = false; clearTimeout(revealTimer); if (state && !state.host) render(); document.querySelector('#rules').showModal(); };
 document.querySelector('#rules-close').onclick = () => document.querySelector('#rules').close();
-document.addEventListener('visibilitychange', () => { if (document.hidden && revealed) { revealed = false; clearTimeout(revealTimer); if (state && !state.host) renderPlayer(); } });
-window.addEventListener('pagehide', () => { revealed = false; clearTimeout(revealTimer); if (state && !state.host) renderPlayer(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) hideRole(); });
+window.addEventListener('pagehide', hideRole);
 window.addEventListener('hashchange', enter);
 setInterval(async () => {
   if (!session || !state || busy || pollBusy || document.hidden) return;

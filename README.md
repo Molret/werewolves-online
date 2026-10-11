@@ -73,3 +73,11 @@ Referencia: [manual original](https://cdn.1j1ju.com/medias/60/0e/b4-les-loups-ga
 No se encontró una licencia de reutilización de las ilustraciones oficiales en la página consultada. Se usan gráficos SVG propios. No se incluyen personajes avanzados, narración automática ni votación por celular.
 
 Más detalles en [docs/architecture.md](docs/architecture.md).
+# Demo interactiva
+
+Abre `/demo` para crear una aldea independiente de ocho personajes. Cambia entre narrador y cualquiera de los jugadores, avanza fases con el backend real, prueba victoria de ambos equipos, muerte de la vidente o empate, y repite las animaciones. La sesión de práctica vive en sessionStorage y no reemplaza tu última partida real. Puedes reiniciar con «Nueva demo».
+
+Las cartas se muestran con un toque o «Ver mi rol», y se ocultan con otro toque, «Ocultar mi rol», Escape, al cambiar de pestaña o después de diez segundos. Las animaciones respetan la preferencia de movimiento reducido.
+
+La demo incluye únicamente los tres roles implementados: aldeano, hombre lobo y vidente. Los demás personajes del juego oficial no están implementados.
+

@@ -43,3 +43,43 @@ test('QR invitation renders the join form and lands in the approval waiting scre
   assert.equal(w.document.querySelector('#card').disabled,true);
   assert.ok(!w.document.querySelector('#card').textContent.includes('Hombre lobo'));
 });
+test('demo uses real phases and private perspectives, with reveal and Escape hide',async t=>{
+  const store=sqliteStore(':memory:');t.after(()=>store.close());const handle=apiHandler(store);
+  const w=browser(t,handle,'demo');
+  await until(()=>w.document.querySelector('#demo-next'));
+  assert.equal(w.document.querySelectorAll('.player-row').length,8);
+  w.document.querySelector('#demo-next').click();
+  await until(()=>w.document.querySelector('#app').dataset.phase==='seer');
+  const select=w.document.querySelector('#demo-perspective');select.value=select.options[1].value;select.dispatchEvent(new w.Event('change'));
+  await until(()=>w.document.querySelector('#role-toggle'));
+  assert.equal(w.document.querySelector('#card').getAttribute('aria-pressed'),'false');
+  w.document.querySelector('#role-toggle').click();
+  assert.match(w.document.querySelector('#card').textContent,/Hombre lobo/);
+  assert.equal(w.document.querySelector('#card').getAttribute('aria-pressed'),'true');
+  w.document.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape'}));
+  assert.equal(w.document.querySelector('#card').getAttribute('aria-pressed'),'false');
+  assert.ok(w.document.querySelector('#demo-next'));
+  assert.equal(w.localStorage.getItem('werewolves.session'),null);
+  for (const phase of ['wolves','dawn','day','seer','wolves','dawn','day','finished']) {
+    w.document.querySelector('#demo-next').click();
+    await until(()=>w.document.querySelector('#app').dataset.phase===phase);
+  }
+  assert.match(w.document.querySelector('.player-view').textContent,/Ganó la aldea/);
+  assert.equal(w.document.querySelector('#demo-next').disabled,true);
+});
+for (const scenario of ['wolves','seer','tie']) test(`demo scenario: ${scenario}`,async t=>{
+  const store=sqliteStore(':memory:');t.after(()=>store.close());const handle=apiHandler(store);const w=browser(t,handle,'demo');
+  await until(()=>w.document.querySelector('#demo-next'));
+  const select=w.document.querySelector('#demo-scenario');select.value=scenario;select.dispatchEvent(new w.Event('change'));
+  async function next() { const before=w.document.querySelector('#demo-next');before.click();await until(()=>w.document.querySelector('#demo-next')!==before); }
+  await next();await next();await next();await next();
+  assert.equal(w.document.querySelector('#app').dataset.phase,'day');
+  if (scenario==='tie') {
+    await next();assert.equal(w.document.querySelectorAll('.player-row.dead').length,1);assert.match(w.document.querySelector('.timeline').textContent,/no eliminó a nadie/);
+  } else if (scenario==='seer') {
+    await next();assert.equal(w.document.querySelector('#app').dataset.phase,'wolves');
+  } else {
+    for(let i=0;i<20 && w.document.querySelector('#app').dataset.phase!=='finished';i++) await next();
+    assert.equal(w.document.querySelector('#app').dataset.phase,'finished');assert.match(w.document.querySelector('.columns').textContent,/La manada venció/);
+  }
+});

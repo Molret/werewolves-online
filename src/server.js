@@ -19,7 +19,7 @@ export function createApp({ database = process.env.DB_PATH || './data/werewolves
         res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(Buffer.from(await response.arrayBuffer())); return;
       }
       const files = { '/': ['index.html','text/html'], '/app.js': ['app.js','text/javascript'], '/style.css': ['style.css','text/css'], '/favicon.svg': ['favicon.svg','image/svg+xml'] };
-      const file = files[url.pathname];
+      const file = files[url.pathname === '/demo' || url.pathname === '/demo/' ? '/' : url.pathname];
       if (!file || !['GET','HEAD'].includes(req.method)) { res.writeHead(404, securityHeaders); res.end('No encontrado'); return; }
       res.writeHead(200, { ...securityHeaders, 'Content-Type': `${file[1]}; charset=utf-8` });
       res.end(req.method === 'HEAD' ? undefined : readFileSync(resolve(publicPath,file[0])));
